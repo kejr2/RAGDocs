@@ -1,163 +1,164 @@
-# RAGDocs - RAG System for Documentation and Code
+# RAGDocs - AI Documentation Assistant
 
-A RAG (Retrieval-Augmented Generation) system designed to handle documentation and code with enhanced code retrieval capabilities.
+A full-stack RAG (Retrieval Augmented Generation) application that allows users to upload documentation (PDFs, Markdown, TXT, HTML) and query them using AI-powered search.
 
-## Phase 1: Core Infrastructure ✅
+## Features
 
-This phase sets up the core infrastructure with Docker Compose, FastAPI backend, PostgreSQL, and Qdrant.
+- 📄 **Multi-format Document Support**: PDF, Markdown, TXT, HTML
+- 🔍 **Advanced RAG System**: Hybrid retrieval with text and code chunking
+- 🤖 **AI-Powered Queries**: Gemini AI integration for intelligent answers
+- 📊 **Vector Database**: Qdrant for semantic search
+- 💾 **Metadata Storage**: PostgreSQL for document and chunk metadata
+- 🎨 **Modern UI**: React frontend with PDF viewer, text viewer, and query sidebar
+- 🐳 **Dockerized**: Full Docker Compose setup for easy deployment
+- 📱 **Responsive Design**: Resizable sidebar, code blocks, and improved text wrapping
 
-### Features
+## Tech Stack
 
-- **FastAPI Backend**: RESTful API with automatic documentation
-- **PostgreSQL**: Metadata storage for documents and indexing information
-- **Qdrant**: Vector database for semantic search
-- **Health Check Endpoint**: Verify system status
-- **Connection Retry Logic**: Robust database and vector store connections
-- **Stub Endpoints**: `/docs/upload` and `/chat/query` ready for implementation
+### Backend
+- **FastAPI**: Python web framework
+- **PostgreSQL**: Relational database for metadata
+- **Qdrant**: Vector database for embeddings
+- **Gemini AI**: Google's Gemini for answer generation
+- **Sentence Transformers**: Dual embedding models (text + code)
+- **LangChain**: Text splitting and processing
+
+### Frontend
+- **React**: UI framework
+- **Vite**: Build tool
+- **Tailwind CSS**: Styling
+- **React PDF**: PDF viewer
+- **Lucide Icons**: Icon library
+
+## Quick Start
 
 ### Prerequisites
+- Docker and Docker Compose
+- Git
 
-- Docker and Docker Compose installed
-- Python 3.11+ (for local development)
+### Installation
 
-### Quick Start
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd RAGDocs
+   ```
 
-1. **Clone the repository** (if applicable) or navigate to the project directory
-
-2. **Start all services with Docker Compose:**
+2. **Start all services**
    ```bash
    docker compose up -d
    ```
 
-3. **Verify the services are running:**
-   ```bash
-   docker compose ps
-   ```
-
-4. **Check the health endpoint:**
-   ```bash
-   curl http://localhost:8000/health
-   ```
-   
-   Expected response:
-   ```json
-   {"status": "ok"}
-   ```
-
-5. **Access API documentation:**
-   - Swagger UI: http://localhost:8000/docs
-   - ReDoc: http://localhost:8000/redoc
-
-### Services
-
-- **Backend API**: http://localhost:8000
-- **PostgreSQL**: localhost:5432
-- **Qdrant HTTP API**: http://localhost:6333
-- **Qdrant Dashboard**: http://localhost:6333/dashboard
-
-### Project Structure
-
-```
-RAGDocs/
-├── app/
-│   ├── api/
-│   │   ├── health.py      # Health check endpoint
-│   │   ├── docs.py        # Document upload endpoint (stub)
-│   │   └── chat.py        # Chat query endpoint (stub)
-│   ├── core/
-│   │   ├── config.py      # Configuration settings
-│   │   ├── database.py    # PostgreSQL connection and retry logic
-│   │   └── qdrant_client.py  # Qdrant connection and retry logic
-│   └── main.py            # FastAPI application
-├── docker-compose.yml     # Docker services configuration
-├── Dockerfile             # Backend container definition
-├── requirements.txt       # Python dependencies
-└── README.md             # This file
-```
-
-### API Endpoints
-
-#### Health Check
-- **GET** `/health`
-  - Returns: `{"status": "ok"}`
-
-#### Document Upload (Stub)
-- **POST** `/docs/upload`
-  - Accepts: Multipart file upload
-  - Returns: Confirmation message (stub)
-
-#### Chat Query (Stub)
-- **POST** `/chat/query`
-  - Body: `{"query": "your question"}`
-  - Returns: Stub response (to be implemented)
-
-### Data Persistence
-
-PostgreSQL and Qdrant data are stored in Docker volumes:
-- `postgres_data`: PostgreSQL database files
-- `qdrant_data`: Qdrant vector database files
-
-These volumes persist across container restarts. To reset:
-```bash
-docker compose down -v
-```
+3. **Access the application**
+   - Frontend: http://localhost:3000
+   - Backend API: http://localhost:8000
+   - API Documentation: http://localhost:8000/docs
 
 ### Development
 
-For local development without Docker:
-
-1. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Set environment variables** (or use .env file):
-   ```bash
-   export POSTGRES_HOST=localhost
-   export POSTGRES_PORT=5432
-   export POSTGRES_USER=ragdocs
-   export POSTGRES_PASSWORD=ragdocs_password
-   export POSTGRES_DB=ragdocs_db
-   export QDRANT_HOST=localhost
-   export QDRANT_PORT=6333
-   export QDRANT_GRPC_PORT=6334
-   ```
-
-3. **Run the application:**
-   ```bash
-   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-   ```
-
-### Testing Phase 1
-
-1. ✅ `docker compose up` works
-2. ✅ `GET localhost:8000/health` → `{"status": "ok"}`
-3. ✅ Qdrant and Postgres volumes persist after restart:
-   ```bash
-   docker compose down
-   docker compose up -d
-   # Verify data still exists
-   ```
-
-### Next Steps (Future Phases)
-
-- Phase 2: Document processing and parsing (PDF, API docs, code files)
-- Phase 3: Enhanced code chunking and embedding strategies
-- Phase 4: RAG query processing and retrieval
-- Phase 5: UI for document upload and chat interface
-
-### Troubleshooting
-
-**Port already in use:**
-- Change ports in `docker-compose.yml` if 8000, 5432, or 6333 are taken
-
-**Connection errors:**
-- Ensure all services are healthy: `docker compose ps`
-- Check logs: `docker compose logs backend`
-
-**Reset everything:**
+#### Backend Development
 ```bash
-docker compose down -v
-docker compose up -d
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+#### Frontend Development
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+## Project Structure
+
+```
+RAGDocs/
+├── app/                    # FastAPI backend
+│   ├── api/                # API routes
+│   ├── core/               # Core configuration
+│   ├── models/             # Database models
+│   └── services/           # Business logic
+├── frontend/               # React frontend
+│   ├── src/
+│   │   ├── components/      # React components
+│   │   └── config.js       # API configuration
+│   └── Dockerfile          # Frontend Docker build
+├── docker-compose.yml      # Docker Compose configuration
+├── Dockerfile              # Backend Docker build
+└── requirements.txt        # Python dependencies
+```
+
+## Configuration
+
+### Environment Variables
+
+#### Backend
+- `POSTGRES_HOST`: PostgreSQL host (default: postgres)
+- `POSTGRES_PORT`: PostgreSQL port (default: 5432)
+- `POSTGRES_USER`: PostgreSQL user
+- `POSTGRES_PASSWORD`: PostgreSQL password
+- `POSTGRES_DB`: PostgreSQL database name
+- `QDRANT_HOST`: Qdrant host (default: qdrant)
+- `QDRANT_PORT`: Qdrant port (default: 6333)
+- `GEMINI_API_KEY`: Google Gemini API key
+- `GEMINI_MODEL`: Gemini model name (default: gemini-2.5-flash)
+
+#### Frontend
+- `VITE_API_BASE_URL`: Backend API URL (default: http://localhost:8000)
+
+## API Endpoints
+
+- `POST /docs/upload`: Upload a document
+- `POST /chat/query`: Query the RAG system
+- `GET /docs/chunks/{doc_id}`: Get document chunks
+- `DELETE /docs/documents/{doc_id}`: Delete a document
+- `GET /health`: Health check
+
+See full API documentation at http://localhost:8000/docs
+
+## Features in Detail
+
+### Document Processing
+- Automatic file type detection
+- Separate text and code chunking
+- Heading extraction
+- Language detection for code blocks
+
+### Query Enhancement
+- LLM-based query rewriting
+- Multi-topic query support
+- Keyword extraction
+- Semantic search optimization
+
+### Retrieval System
+- Hybrid retrieval (text + code)
+- Reranking for relevance
+- Query caching (LFU)
+- Multi-query support for complex questions
+
+### Frontend Features
+- PDF viewer with page navigation and zoom
+- Text viewer for TXT, MD, HTML files
+- Resizable query sidebar
+- Code block rendering with syntax highlighting
+- Responsive design
+
+## Documentation
+
+- [Frontend Setup Guide](FRONTEND_SETUP.md)
+- [Document Types Guide](DOCUMENT_TYPES_GUIDE.md)
+- [Gemini Setup Guide](GEMINI_SETUP.md)
+- [Frontend Docker Guide](FRONTEND_DOCKER.md)
+
+## License
+
+[Add your license here]
+
+## Contributing
+
+[Add contribution guidelines here]
+
+## Support
+
+[Add support information here]
