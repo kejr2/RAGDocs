@@ -9,8 +9,10 @@ from app.core.database import get_db
 from app.core.qdrant_client import get_qdrant_client, ensure_collection_exists
 from app.models.document import Document, Chunk as ChunkModel
 from app.services.chunking import chunk_document
+from app.services.processing import PDFProcessor, HTMLProcessor
 from app.services.embeddings import embedding_service
 from app.core.database import Base, engine
+import os
 
 router = APIRouter()
 
@@ -39,14 +41,11 @@ async def upload_document(
         content = await file.read()
         filename = file.filename or "unknown"
         
-        # Try to decode as text
-        try:
-            text_content = content.decode('utf-8')
-        except:
-            text_content = content.decode('utf-8', errors='ignore')
+        # Detect file type
+        file_ext = os.path.splitext(filename)[1].lower() if '.' in filename else ''
         
-        # Generate doc_id from content hash
-        doc_id = hashlib.md5(text_content.encode()).hexdigest()
+        # Generate doc_id from content hash (use raw content for consistency)
+        doc_id = hashlib.md5(content).hexdigest()
         
         # Check if document already exists
         existing_doc = db.query(Document).filter(Document.id == doc_id).first()
@@ -60,8 +59,30 @@ async def upload_document(
                 status="already_exists"
             )
         
-        # Chunk document using simple chunking logic
-        chunks = chunk_document(text_content, filename, doc_id)
+        # Process document based on file type
+        if file_ext == '.pdf':
+            # Process PDF
+            processor = PDFProcessor()
+            chunks = processor.process_pdf(content, filename, doc_id)
+        elif file_ext in ['.html', '.htm']:
+            # Process HTML
+            try:
+                html_content = content.decode('utf-8')
+            except:
+                html_content = content.decode('utf-8', errors='ignore')
+            processor = HTMLProcessor()
+            chunks = processor.process_html(html_content, filename, doc_id)
+        else:
+            # Default: text processing
+            try:
+                text_content = content.decode('utf-8')
+            except:
+                text_content = content.decode('utf-8', errors='ignore')
+            chunks = chunk_document(text_content, filename, doc_id)
+        
+        # Ensure all chunks have the correct doc_id
+        for chunk in chunks:
+            chunk.doc_id = doc_id
         
         # Separate text and code chunks
         text_chunks = [c for c in chunks if c.type == "text"]

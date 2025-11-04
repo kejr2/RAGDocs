@@ -63,6 +63,23 @@ services:
     volumes:
       - ./app:/app/app
       - ./uploads:/app/uploads
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ragdocs_frontend
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - ragdocs_network
+    restart: unless-stopped
 
 volumes:
   postgres_data:

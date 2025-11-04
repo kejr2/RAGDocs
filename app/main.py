@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, docs, chat, chunks, documents
+from app.api import health, docs, chat, chunks, documents, debug, test_vectordb
 from app.core.config import settings
 from app.core.database import init_db, Base, engine
 from app.core.qdrant_client import init_qdrant
@@ -27,6 +27,8 @@ app.include_router(docs.router, prefix="/docs", tags=["docs"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(chunks.router, prefix="/docs", tags=["docs"])
 app.include_router(documents.router, prefix="/docs", tags=["docs"])
+app.include_router(debug.router, prefix="/debug", tags=["debug"])
+app.include_router(test_vectordb.router, prefix="/test/vectordb", tags=["test"])
 
 
 @app.on_event("startup")

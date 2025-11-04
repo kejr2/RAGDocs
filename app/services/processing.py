@@ -167,9 +167,10 @@ class PDFProcessor:
     """Processor for PDF documents."""
     
     def __init__(self):
-        self.doc_processor = DocumentProcessor()
+        from app.services.chunking import chunk_document
+        self.chunk_document = chunk_document
     
-    def process_pdf(self, pdf_content: bytes, filename: str, doc_id: str) -> List[Chunk]:
+    def process_pdf(self, pdf_content: bytes, filename: str, doc_id: str) -> List:
         """Extract text from PDF and process it."""
         try:
             from pypdf import PdfReader
@@ -178,14 +179,16 @@ class PDFProcessor:
             reader = PdfReader(BytesIO(pdf_content))
             text_content = ""
             
-            for page in reader.pages:
-                text_content += page.extract_text() + "\n\n"
+            for page_num, page in enumerate(reader.pages, 1):
+                page_text = page.extract_text()
+                if page_text:
+                    text_content += f"\n\n--- Page {page_num} ---\n\n{page_text}"
             
-            return self.doc_processor.process_document(
-                text_content,
-                filename,
-                doc_id
-            )
+            if not text_content.strip():
+                raise Exception("No text could be extracted from PDF. The PDF might be scanned/image-based.")
+            
+            # Use simple chunking logic (matches current implementation)
+            return self.chunk_document(text_content, filename, doc_id)
         except Exception as e:
             raise Exception(f"Error processing PDF: {str(e)}")
 
@@ -194,9 +197,10 @@ class HTMLProcessor:
     """Processor for HTML documents."""
     
     def __init__(self):
-        self.doc_processor = DocumentProcessor()
+        from app.services.chunking import chunk_document
+        self.chunk_document = chunk_document
     
-    def process_html(self, html_content: str, filename: str, doc_id: str) -> List[Chunk]:
+    def process_html(self, html_content: str, filename: str, doc_id: str) -> List:
         """Extract text from HTML and process it."""
         try:
             from bs4 import BeautifulSoup
@@ -204,22 +208,37 @@ class HTMLProcessor:
             soup = BeautifulSoup(html_content, 'html.parser')
             
             # Remove script and style elements
-            for script in soup(["script", "style"]):
+            for script in soup(["script", "style", "nav", "footer", "header"]):
                 script.decompose()
             
-            # Get text
-            text = soup.get_text()
+            # Extract text with structure
+            text_content = ""
+            
+            # Preserve headings
+            for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+                level = int(heading.name[1])
+                text_content += f"\n{'#' * level} {heading.get_text().strip()}\n\n"
+            
+            # Extract paragraphs and code blocks
+            for element in soup.find_all(['p', 'pre', 'code', 'blockquote', 'li']):
+                text = element.get_text().strip()
+                if text:
+                    if element.name in ['pre', 'code']:
+                        # Preserve code blocks
+                        text_content += f"\n```\n{text}\n```\n\n"
+                    else:
+                        text_content += f"{text}\n\n"
+            
+            # Fallback: get all text if structure extraction didn't work well
+            if len(text_content) < 100:
+                text_content = soup.get_text()
             
             # Clean up whitespace
-            lines = (line.strip() for line in text.splitlines())
-            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text = '\n'.join(chunk for chunk in chunks if chunk)
+            lines = (line.strip() for line in text_content.splitlines())
+            text_content = '\n'.join(line for line in lines if line)
             
-            return self.doc_processor.process_document(
-                text,
-                filename,
-                doc_id
-            )
+            # Use simple chunking logic (matches current implementation)
+            return self.chunk_document(text_content, filename, doc_id)
         except Exception as e:
             raise Exception(f"Error processing HTML: {str(e)}")
 
