@@ -221,3 +221,6 @@ It's just an informational message saying "I checked, the collections are ready 
 
 The actual storage happens during upload, and you'll see different messages then (about embedding, upserting, etc.).
 
+
+
+

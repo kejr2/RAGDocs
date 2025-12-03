@@ -462,3 +462,6 @@ async def get_collections_info():
             detail=f"Error getting collections info: {str(e)}"
         )
 
+
+
+

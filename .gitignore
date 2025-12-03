@@ -118,44 +118,74 @@ ehthumbs.db
 Thumbs.db
 Desktop.ini
 
-# Uploads and user data (exclude user uploads but keep documentation)
+# Uploads and user data
 uploads/
 *.pdf
 *.txt
 *.html
+*.doc
+*.docx
+
+# Keep essential markdown documentation (but exclude samples/tests)
 !README.md
 !*.md
-!FRONTEND_SETUP.md
-!DOCUMENT_TYPES_GUIDE.md
-!GEMINI_SETUP.md
-!FRONTEND_DOCKER.md
-!SHOWCASE_MESSAGE.md
-!API_DOCUMENTATION.md
-!ARCHITECTURE_FLOW.md
-!QUERY_ENHANCEMENT.md
-!START_BACKEND.md
-!STORAGE_EXPLAINED.md
-!STORAGE_VERIFICATION.md
-!TEST_VECTORDB.md
-!ADD_DOCUMENT_TYPES.md
-!TESTING.md
-!QUICK_START.md
+sample_*.md
+test_*.md
+
+# Test virtual environments
+test_venv/
+test_env/
+
+# Test scripts and utilities (non-essential)
+test_*.py
+test_*.sh
+check_*.py
+setup_*.sh
+*_test.py
+*_test.sh
+
+# Sample/test documents (non-markdown)
+sample_*.pdf
+sample_*.txt
+test_*.pdf
+
+# Cheat sheets and temporary docs
+*_cheatsheet.*
+*_temp.*
+*_backup.*
 
 # Frontend build artifacts
 frontend/dist/
 frontend/build/
 frontend/.vite/
 frontend/.cache/
+frontend/node_modules/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
 
 # Backend build artifacts
 app/__pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
 
 # Logs
 logs/
 *.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
 # Runtime data
 pids/
@@ -198,12 +228,17 @@ out/
 
 # VS Code
 .history/
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 
-# Python specific patterns
-*.py[cod]
-*$py.class
-*.so
-__pycache__/
+# Python specific patterns (consolidated - already covered above)
+# *.py[cod]
+# *$py.class
+# *.so
+# __pycache__/
 
 # Flask
 instance/
@@ -318,11 +353,11 @@ poetry.lock
 # PEP 582
 __pypackages__/
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+# Environments (consolidated - already covered above)
+# .env
+# .venv
+# env/
+# venv/
+# ENV/
+# env.bak/
+# venv.bak/

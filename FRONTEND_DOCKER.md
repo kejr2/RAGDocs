@@ -149,3 +149,6 @@ Once all services are running:
 - **Backend API**: http://localhost:8000
 - **Backend Docs**: http://localhost:8000/docs
 
+
+
+

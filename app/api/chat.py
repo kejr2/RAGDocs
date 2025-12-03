@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 from sqlalchemy.orm import Session
 from qdrant_client.models import Filter, FieldCondition, MatchValue
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from app.core.database import get_db
 from app.core.qdrant_client import get_qdrant_client, ensure_collection_exists
@@ -12,6 +14,9 @@ from app.services.query_enhancer import query_enhancer
 from app.services.answer_formatter import format_basic_answer
 
 router = APIRouter()
+
+# Thread pool for parallel CPU-bound operations
+_executor = ThreadPoolExecutor(max_workers=4)
 
 
 class QueryRequest(BaseModel):
@@ -38,6 +43,78 @@ def detect_query_type(query: str) -> str:
     return "text"
 
 
+async def generate_embeddings_parallel(query: str) -> tuple:
+    """Generate text and code embeddings in parallel"""
+    loop = asyncio.get_event_loop()
+    
+    # Run both embeddings in parallel
+    text_embedding_task = loop.run_in_executor(
+        _executor, 
+        lambda: embedding_service.encode_text([query])[0]
+    )
+    code_embedding_task = loop.run_in_executor(
+        _executor,
+        lambda: embedding_service.encode_code([query])[0]
+    )
+    
+    # Wait for both to complete
+    text_embedding, code_embedding = await asyncio.gather(
+        text_embedding_task, 
+        code_embedding_task
+    )
+    
+    return text_embedding, code_embedding
+
+
+async def search_collections_parallel(
+    qdrant_client,
+    text_embedding: List[float],
+    code_embedding: List[float],
+    text_dim: int,
+    code_dim: int,
+    query_filter: Optional[Filter],
+    text_limit: int,
+    code_limit: int,
+    should_search_code: bool = True
+) -> tuple:
+    """Search text and code collections in parallel"""
+    loop = asyncio.get_event_loop()
+    
+    # Ensure collections exist
+    ensure_collection_exists("text_chunks", text_dim)
+    if should_search_code:
+        ensure_collection_exists("code_chunks", code_dim)
+    
+    # Run searches in parallel
+    text_search_task = loop.run_in_executor(
+        _executor,
+        lambda: qdrant_client.search(
+            collection_name="text_chunks",
+            query_vector=text_embedding,
+            query_filter=query_filter,
+            limit=text_limit
+        )
+    )
+    
+    code_search_task = None
+    if should_search_code:
+        code_search_task = loop.run_in_executor(
+            _executor,
+            lambda: qdrant_client.search(
+                collection_name="code_chunks",
+                query_vector=code_embedding,
+                query_filter=query_filter,
+                limit=code_limit
+            )
+        )
+    
+    # Wait for searches to complete
+    text_results = await text_search_task
+    code_results = await code_search_task if code_search_task else []
+    
+    return text_results, code_results
+
+
 @router.post("/query", status_code=status.HTTP_200_OK)
 async def query_chat(
     request: QueryRequest,
@@ -47,10 +124,16 @@ async def query_chat(
     Query the RAG assistant using hybrid retrieval.
     Detects query type and searches appropriate collection.
     """
+    import time
+    total_start = time.time()
+    
     try:
         # Step 1: Enhance query using LLM for better retrieval
+        enhancement_start = time.time()
         print(f"🔍 Original query: {request.query}")
         enhanced_data = query_enhancer.enhance_query(request.query)
+        enhancement_time = time.time() - enhancement_start
+        print(f"⚡ Query enhancement: {enhancement_time:.2f}s")
         
         # Get retrieval strategy from enhancement
         required_topics = enhanced_data.get("required_topics", [])
@@ -90,97 +173,73 @@ async def query_chat(
         # Especially important for questions like "What is X?"
         all_results = []
         
-        # If multi-query needed, search for each topic separately
+        # Performance timing
+        import time
+        retrieval_start = time.time()
+        retrieval_time = 0  # Initialize for later use
+        
+        # Get dimensions upfront (needed for both paths)
+        text_dim = embedding_service.get_text_embedding_dim()
+        code_dim = embedding_service.get_code_embedding_dim()
+        
+        # If multi-query needed, search for each topic separately (with parallelization)
         if multi_query_needed and len(required_topics) > 1:
             print(f"🔍 Multi-query mode: Searching for {len(required_topics)} topics")
             
             # Build hybrid query for main search
             hybrid_search_query = query_enhancer.build_hybrid_search_query(enhanced_data, request.query)
             
-            # Search for each topic
-            for topic in required_topics:
-                print(f"  🔎 Searching for topic: {topic}")
+            # Parallelize topic searches
+            async def search_topic(topic: str):
+                """Search both collections for a topic in parallel"""
                 topic_query = f"{topic} {request.query}"
-                
-                # Search text chunks for this topic
-                try:
-                    text_dim = embedding_service.get_text_embedding_dim()
-                    ensure_collection_exists("text_chunks", text_dim)
-                    text_embedding = embedding_service.encode_text([topic_query])[0]
-                    text_results = qdrant_client.search(
-                        collection_name="text_chunks",
-                        query_vector=text_embedding,
-                        query_filter=query_filter,
-                        limit=effective_top_k // len(required_topics) + 2  # Distribute chunks across topics
-                    )
-                    all_results.extend([(r, "text") for r in text_results])
-                    print(f"    ✅ Found {len(text_results)} text chunks for {topic}")
-                except Exception as e:
-                    print(f"    ❌ Error searching text chunks for {topic}: {e}")
-                
-                # Search code chunks for this topic
-                try:
-                    code_dim = embedding_service.get_code_embedding_dim()
-                    ensure_collection_exists("code_chunks", code_dim)
-                    code_embedding = embedding_service.encode_code([topic_query])[0]
-                    code_results = qdrant_client.search(
-                        collection_name="code_chunks",
-                        query_vector=code_embedding,
-                        query_filter=query_filter,
-                        limit=effective_top_k // len(required_topics) + 2
-                    )
-                    all_results.extend([(r, "code") for r in code_results])
-                    print(f"    ✅ Found {len(code_results)} code chunks for {topic}")
-                except Exception as e:
-                    print(f"    ❌ Error searching code chunks for {topic}: {e}")
+                text_emb, code_emb = await generate_embeddings_parallel(topic_query)
+                text_res, code_res = await search_collections_parallel(
+                    qdrant_client, text_emb, code_emb, text_dim, code_dim,
+                    query_filter, 
+                    effective_top_k // len(required_topics) + 2,
+                    effective_top_k // len(required_topics) + 2,
+                    should_search_code=True
+                )
+                return (text_res, code_res)
+            
+            # Search all topics in parallel
+            topic_results = await asyncio.gather(*[search_topic(topic) for topic in required_topics])
+            
+            # Combine results
+            for text_res, code_res in topic_results:
+                all_results.extend([(r, "text") for r in text_res])
+                all_results.extend([(r, "code") for r in code_res])
         else:
-            # Single query mode (original behavior)
+            # Single query mode - OPTIMIZED with parallel execution
             hybrid_search_query = query_enhancer.build_hybrid_search_query(enhanced_data, request.query)
             
-            # Search text chunks (use enhanced query)
-            try:
-                text_dim = embedding_service.get_text_embedding_dim()
-                ensure_collection_exists("text_chunks", text_dim)
-                text_embedding = embedding_service.encode_text([hybrid_search_query])[0]
-                text_results = qdrant_client.search(
-                    collection_name="text_chunks",
-                    query_vector=text_embedding,
-                    query_filter=query_filter,
-                    limit=effective_top_k * 2  # Get more text results for better coverage
-                )
-                all_results.extend([(r, "text") for r in text_results])
-            except Exception as e:
-                print(f"Error searching text chunks: {e}")
-            
-            # Search code chunks (especially for "what is" questions that might have examples)
-            # or if query type is code
+            # Determine if we should search code
             should_search_code = (
                 query_type == "code" or 
                 enhanced_data.get("query_type") in ["example", "how-to", "multi-step"] or
-                any(word in hybrid_search_query.lower() for word in ["what is", "what are", "explain", "describe", "define", "example", "code"])
+                any(word in hybrid_search_query.lower() for word in ["what is", "what are", "explain", "describe", "define", "example", "code", "number", "value", "test"])
             )
             
+            # Generate embeddings in parallel
+            text_embedding, code_embedding = await generate_embeddings_parallel(hybrid_search_query)
+            
+            # Search both collections in parallel
+            text_limit = effective_top_k + 5  # Reduced from *2 for speed
+            code_limit = max(effective_top_k + 5, 15) if should_search_code else 0
+            
+            text_results, code_results = await search_collections_parallel(
+                qdrant_client, text_embedding, code_embedding, text_dim, code_dim,
+                query_filter, text_limit, code_limit, should_search_code
+            )
+            
+            all_results.extend([(r, "text") for r in text_results])
             if should_search_code:
-                try:
-                    code_dim = embedding_service.get_code_embedding_dim()
-                    ensure_collection_exists("code_chunks", code_dim)
-                    code_embedding = embedding_service.encode_code([hybrid_search_query])[0]
-                    
-                    code_limit = max(effective_top_k * 2, 15)  # At least 15, or 2x top_k
-                    
-                    code_results = qdrant_client.search(
-                        collection_name="code_chunks",
-                        query_vector=code_embedding,
-                        query_filter=query_filter,
-                        limit=code_limit
-                    )
-                    
-                    print(f"📊 Code search returned {len(code_results)} results")
-                    all_results.extend([(r, "code") for r in code_results])
-                except Exception as e:
-                    print(f"❌ Error searching code chunks: {e}")
-                    import traceback
-                    traceback.print_exc()
+                all_results.extend([(r, "code") for r in code_results])
+                print(f"📊 Code search returned {len(code_results)} results")
+        
+        retrieval_time = time.time() - retrieval_start
+        print(f"⚡ Retrieval completed in {retrieval_time:.2f}s")
         
         # Boost results with matching headings (especially for definition questions)
         # Use enhanced data to better identify definition questions
@@ -192,16 +251,44 @@ async def query_chat(
         )
         
         def boost_score(result_tuple):
-            """Boost score if heading matches query keywords"""
+            """Boost score based on semantic keyword matching - general and adaptable"""
             result, result_type = result_tuple
             score = result.score
             payload = result.payload
             heading = payload.get("heading", "").lower()
-            content = payload.get("content", "").lower()
+            content_lower = payload.get("content", "").lower()
+            content_preview = content_lower[:200]  # Check first 200 chars for better matching
             
-            # Boost if heading contains query keywords
-            if is_definition_question:
-                # Extract the main topic from query (e.g., "fastapi" from "what is fastapi?")
+            # Get keywords from query enhancement (semantic, not hardcoded)
+            query_keywords = enhanced_data.get("keywords", [])
+            query_keywords_lower = [kw.lower() for kw in query_keywords]
+            
+            # Combine query keywords with important words from the original query
+            # Extract meaningful words (length > 3, not common stop words)
+            stop_words = {"what", "is", "are", "the", "for", "with", "from", "this", "that", "how", "to", "do", "does", "should", "can", "will"}
+            query_words = [w.lower() for w in request.query.split() if len(w) > 3 and w.lower() not in stop_words]
+            all_keywords = list(set(query_keywords_lower + query_words))
+            
+            # Count keyword matches in heading and content
+            heading_matches = sum(1 for kw in all_keywords if kw in heading)
+            content_matches = sum(1 for kw in all_keywords if kw in content_preview)
+            total_matches = heading_matches + content_matches
+            
+            # PRIORITY 1: Strong keyword matches (heading matches are more important)
+            if heading_matches >= 2 or (heading_matches >= 1 and content_matches >= 2):
+                # Very strong boost for chunks with multiple keyword matches
+                score = score * 0.1  # Strong boost (lower = better for distance)
+                print(f"🚀 Strong boost for keyword match: {heading[:50]} ({total_matches} matches)")
+            elif heading_matches >= 1 or content_matches >= 2:
+                # Medium boost for chunks with some keyword matches
+                score = score * 0.4
+            elif total_matches >= 1:
+                # Light boost for any keyword match
+                score = score * 0.7
+            
+            # PRIORITY 2: Definition questions (preserve existing logic)
+            if is_definition_question and total_matches == 0:
+                # Extract the main topic from query
                 topic = query_lower.replace("what is", "").replace("what are", "").replace("define", "").replace("explain", "").replace("describe", "").strip()
                 topic = topic.replace("?", "").strip()
                 
@@ -213,15 +300,6 @@ async def query_chat(
                 # Medium boost for heading containing the topic
                 elif topic and topic in heading:
                     score = score * 0.6
-            
-            # Boost for test-related queries
-            if any(word in query_lower for word in ["test", "testing", "test card", "card number"]):
-                if "test" in heading or "test" in content[:100]:  # Check first 100 chars for performance
-                    # Strong boost for test card numbers queries
-                    if "card" in query_lower and ("card" in heading or "card" in content[:100]):
-                        score = score * 0.2  # Strong boost for test card queries
-                    else:
-                        score = score * 0.5  # Medium boost for test-related queries
             
             return score
         
@@ -347,11 +425,32 @@ async def query_chat(
             
             # Filter by relevance threshold
             if similarity_score < threshold:
-                # For installation queries, be more lenient with code chunks
-                if "install" in request.query.lower() and chunk_type == "code" and "install" in content.lower():
-                    # Allow code chunks with install commands even if slightly below threshold
+                # Special handling for chunks with strong keyword matches (general approach)
+                query_lower = request.query.lower()
+                query_keywords = enhanced_data.get("keywords", [])
+                query_keywords_lower = [kw.lower() for kw in query_keywords]
+                
+                # Extract meaningful words from query (length > 3, not stop words)
+                stop_words = {"what", "is", "are", "the", "for", "with", "from", "this", "that", "how", "to", "do", "does", "should", "can", "will"}
+                query_words = [w.lower() for w in request.query.split() if len(w) > 3 and w.lower() not in stop_words]
+                all_keywords = list(set(query_keywords_lower + query_words))
+                
+                # Count keyword matches in content/heading
+                content_lower = content.lower()
+                heading_lower = heading.lower()
+                keyword_matches = sum(1 for kw in all_keywords if kw in content_lower or kw in heading_lower)
+                
+                # For installation queries, be more lenient with code chunks containing install keywords
+                if "install" in query_lower and chunk_type == "code" and "install" in content_lower:
                     if similarity_score >= threshold * 0.7:
                         print(f"✅ Including install code chunk despite lower score: {similarity_score:.3f}")
+                    else:
+                        continue
+                # For chunks with strong keyword matches, be more lenient (general approach)
+                elif keyword_matches >= 2:
+                    # If chunk has multiple keyword matches, include it even if slightly below threshold
+                    if similarity_score >= threshold * 0.6:
+                        print(f"✅ Including keyword-rich chunk despite lower score: {similarity_score:.3f} ({keyword_matches} matches)")
                     else:
                         continue
                 else:
@@ -409,7 +508,14 @@ async def query_chat(
         
         # Generate answer with Gemini or fallback
         if gemini_service.enabled and context_chunks:
+            generation_start = time.time()
             answer = gemini_service.generate_answer(request.query, context)
+            generation_time = time.time() - generation_start
+            print(f"⚡ Answer generation: {generation_time:.2f}s")
+            
+            total_time = time.time() - total_start
+            print(f"⚡ Total query time: {total_time:.2f}s (enhancement: {enhancement_time:.2f}s, retrieval: {retrieval_time:.2f}s, generation: {generation_time:.2f}s)")
+            
             if not answer or len(answer.strip()) < 10:
                 # Fallback if Gemini fails or returns empty
                 print("⚠️  Gemini returned empty answer, using fallback")

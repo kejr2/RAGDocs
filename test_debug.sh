@@ -71,3 +71,6 @@ echo ""
 echo "📄 Full response saved to: /tmp/debug_response.json"
 echo "View with: cat /tmp/debug_response.json | jq '.'"
 
+
+
+

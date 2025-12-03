@@ -294,3 +294,6 @@ docker compose logs -f backend | grep -E "(TEST|Search|similarity|distance)"
 - 📈 Analyze relevance scores
 - 🔎 Inspect what context is being retrieved
 
+
+
+

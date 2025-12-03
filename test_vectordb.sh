@@ -101,3 +101,6 @@ echo "  - View backend logs for detailed output: docker compose logs -f backend"
 echo "  - Check similarity scores (higher = more relevant)"
 echo "  - Compare text vs code results to see which collection is better for your query"
 
+
+
+

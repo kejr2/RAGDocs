@@ -150,3 +150,6 @@ The PDF viewer uses PDF.js worker. The worker path is automatically configured i
 - For production, you might want to serve PDFs from the backend
 - The query sidebar is collapsible for better PDF viewing experience
 
+
+
+

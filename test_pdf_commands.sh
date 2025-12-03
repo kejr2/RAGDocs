@@ -86,3 +86,6 @@ echo ""
 echo "You can now query this PDF using doc_id: $DOC_ID"
 echo "Or query all documents (omit doc_id)"
 
+
+
+
