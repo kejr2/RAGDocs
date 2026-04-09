@@ -1,7 +1,8 @@
 import logging
 import json
+import os
 import time
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, Request, status, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from sqlalchemy.orm import Session
@@ -9,6 +10,8 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from sse_starlette.sse import EventSourceResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.core.database import get_db
 from app.core.qdrant_client import get_qdrant_client, ensure_collection_exists
@@ -21,12 +24,13 @@ from app.services.retrieval import QueryCache
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
-# Thread pool for parallel CPU-bound operations
-_executor = ThreadPoolExecutor(max_workers=4)
+# Thread pool for parallel CPU-bound operations; configurable via WORKER_THREADS env var
+_executor = ThreadPoolExecutor(max_workers=int(os.getenv("WORKER_THREADS", "4")))
 
-# Module-level query cache (shared across requests)
-query_cache = QueryCache(max_size=500)
+# Module-level query cache: 500 entries, 1-hour TTL
+query_cache = QueryCache(max_size=500, ttl=3600)
 
 
 class QueryRequest(BaseModel):
@@ -279,8 +283,10 @@ async def _run_rag_pipeline(request: QueryRequest) -> QueryResponse:
 
 
 @router.post("/query", status_code=status.HTTP_200_OK)
+@limiter.limit("30/minute")
 async def query_chat(
     request: QueryRequest,
+    http_request: Request,
     db: Session = Depends(get_db)
 ) -> QueryResponse:
     """Query the RAG assistant using hybrid retrieval with cross-encoder reranking."""
@@ -295,8 +301,10 @@ async def query_chat(
 
 
 @router.post("/stream")
+@limiter.limit("20/minute")
 async def stream_chat(
     request: QueryRequest,
+    http_request: Request,
     db: Session = Depends(get_db)
 ):
     """Stream answer tokens via Server-Sent Events (SSE).

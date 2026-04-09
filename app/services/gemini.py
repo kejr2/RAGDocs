@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from typing import Optional, AsyncGenerator
@@ -79,25 +80,32 @@ ANSWER:"""
             raise
 
     async def stream_answer(self, query: str, context: str) -> AsyncGenerator[str, None]:
-        """Stream answer tokens from Gemini API as an async generator."""
+        """Stream answer tokens from Gemini API as an async generator.
+
+        The Gemini SDK is synchronous, so we run it in a thread pool via
+        asyncio.to_thread() to avoid blocking the event loop.
+        """
         if not self.enabled or not self.model:
             yield "Gemini is not configured. Please set GEMINI_API_KEY."
             return
 
         try:
-            response = self.model.generate_content(
-                self._build_prompt(query, context),
-                generation_config={
-                    "temperature": 0.3,
-                    "top_p": 0.8,
-                    "top_k": 40,
-                    "max_output_tokens": 2048,
-                },
-                stream=True
-            )
-            for chunk in response:
-                if chunk.text:
-                    yield chunk.text
+            prompt = self._build_prompt(query, context)
+            config = {
+                "temperature": 0.3,
+                "top_p": 0.8,
+                "top_k": 40,
+                "max_output_tokens": 2048,
+            }
+
+            def _collect_chunks() -> list:
+                resp = self.model.generate_content(prompt, generation_config=config, stream=True)
+                return [chunk.text for chunk in resp if chunk.text]
+
+            chunks = await asyncio.to_thread(_collect_chunks)
+            for chunk in chunks:
+                yield chunk
+
         except Exception as e:
             logger.error("Gemini streaming error: %s", e)
             yield f"\n\n[Error generating response: {e}]"

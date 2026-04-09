@@ -47,11 +47,12 @@ export default function PDFViewer({ fileUrl, filename, darkMode }) {
     setScale(containerWidth / pageWidthPt);
   };
 
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen?.();
-    } else {
-      document.exitFullscreen?.();
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) await containerRef.current?.requestFullscreen?.();
+      else await document.exitFullscreen?.();
+    } catch {
+      // fullscreen not available or denied — ignore silently
     }
   };
 

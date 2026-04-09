@@ -181,19 +181,24 @@ export default function TextViewer({ fileUrl, filename, fileContent, darkMode })
                 <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{lang}</span>
                 <Code className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
               </div>
-              <pre className="p-5 overflow-x-auto text-sm leading-relaxed" style={{ margin: 0 }}>
-                <code className={`language-${lang} hljs`}
-                      dangerouslySetInnerHTML={{
-                        __html: (() => {
-                          try {
-                            const hljs = require('highlight.js/lib/core');
-                            const hlMap = { javascript: 'javascript', python: 'python', json: 'json', yaml: 'yaml', css: 'css', bash: 'bash', text: null };
-                            if (!hlMap[lang]) return content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-                            return hljs.highlight(content, { language: lang }).value;
-                          } catch { return content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-                        })()
-                      }} />
-              </pre>
+              <div className="p-5 overflow-x-auto text-sm leading-relaxed">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeHighlight]}
+                  components={{
+                    pre({ children }) { return <>{children}</>; },
+                    code({ className, children }) {
+                      return (
+                        <code className={className} style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+                          {children}
+                        </code>
+                      );
+                    },
+                  }}
+                >
+                  {`\`\`\`${lang}\n${content}\n\`\`\``}
+                </ReactMarkdown>
+              </div>
             </div>
           )}
         </div>

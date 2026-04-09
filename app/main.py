@@ -3,8 +3,11 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.api import health, docs, chat, chunks, documents, debug, test_vectordb
+from app.api.chat import limiter
 from app.core.config import settings
 from app.core.database import init_db, Base, engine
 from app.core.qdrant_client import init_qdrant
@@ -22,6 +25,10 @@ app = FastAPI(
     description="Production-grade RAG system for code documentation",
     version="2.0.0"
 )
+
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — restrict to known origins; configure CORS_ORIGINS env var in production
 cors_origins = settings.CORS_ORIGINS
