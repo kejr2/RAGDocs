@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import List, Dict, Optional, Any
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from dataclasses import dataclass
@@ -203,36 +204,63 @@ class HybridRetriever:
 
 
 class QueryCache:
-    """In-memory LFU cache for full query responses."""
+    """In-memory LFU+TTL cache for full query responses.
 
-    def __init__(self, max_size: int = 500):
+    Eviction priority:
+      1. Expired entries (age > ttl) are purged on every write.
+      2. When still at capacity, the least-frequently-used entry is evicted.
+    """
+
+    def __init__(self, max_size: int = 500, ttl: int = 3600):
         self.cache: Dict[str, Any] = {}
         self.max_size = max_size
+        self.ttl = ttl  # seconds
         self.access_count: Dict[str, int] = {}
+        self.timestamps: Dict[str, float] = {}
 
     def _make_key(self, query: str, doc_id: Optional[str]) -> str:
         import hashlib
         key_str = f"{query}:{doc_id or 'all'}"
         return hashlib.md5(key_str.encode()).hexdigest()
 
+    def _evict_expired(self):
+        now = time.time()
+        expired = [k for k, ts in self.timestamps.items() if now - ts > self.ttl]
+        for k in expired:
+            self.cache.pop(k, None)
+            self.access_count.pop(k, None)
+            self.timestamps.pop(k, None)
+        if expired:
+            logger.debug("Evicted %d expired cache entries", len(expired))
+
     def get(self, query: str, doc_id: Optional[str] = None) -> Optional[Any]:
         key = self._make_key(query, doc_id)
-        if key in self.cache:
-            self.access_count[key] = self.access_count.get(key, 0) + 1
-            logger.debug("Cache hit for query: %s", query[:60])
-            return self.cache[key]
-        return None
+        if key not in self.cache:
+            return None
+        if time.time() - self.timestamps.get(key, 0) > self.ttl:
+            # Stale entry — remove and miss
+            self.cache.pop(key, None)
+            self.access_count.pop(key, None)
+            self.timestamps.pop(key, None)
+            return None
+        self.access_count[key] = self.access_count.get(key, 0) + 1
+        logger.debug("Cache hit for query: %s", query[:60])
+        return self.cache[key]
 
     def set(self, query: str, response: Any, doc_id: Optional[str] = None):
         key = self._make_key(query, doc_id)
+        self._evict_expired()
         if len(self.cache) >= self.max_size and self.access_count:
             lfu_key = min(self.access_count.items(), key=lambda x: x[1])[0]
-            del self.cache[lfu_key]
-            del self.access_count[lfu_key]
+            self.cache.pop(lfu_key, None)
+            self.access_count.pop(lfu_key, None)
+            self.timestamps.pop(lfu_key, None)
         self.cache[key] = response
         self.access_count[key] = 1
+        self.timestamps[key] = time.time()
         logger.debug("Cached response for query: %s", query[:60])
 
     def clear(self):
         self.cache.clear()
         self.access_count.clear()
+        self.timestamps.clear()

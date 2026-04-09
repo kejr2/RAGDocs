@@ -1,4 +1,5 @@
 import logging
+import google.generativeai as genai
 from fastapi import APIRouter, status, Depends
 from pydantic import BaseModel
 from datetime import datetime
@@ -24,7 +25,7 @@ class HealthResponse(BaseModel):
 
 @router.get("/health", status_code=status.HTTP_200_OK)
 async def health_check(db: Session = Depends(get_db)) -> HealthResponse:
-    """Comprehensive health check: PostgreSQL, Qdrant, embedding models, Gemini."""
+    """Comprehensive health check: PostgreSQL, Qdrant, embedding models, Gemini API."""
     checks: Dict[str, str] = {}
     degraded = False
 
@@ -56,8 +57,17 @@ async def health_check(db: Session = Depends(get_db)) -> HealthResponse:
         checks["models"] = f"error: {e}"
         degraded = True
 
-    # Gemini
-    checks["gemini"] = "enabled" if gemini_service.enabled else "disabled"
+    # Gemini — probe with a cheap list_models call to verify API key validity
+    if gemini_service.enabled:
+        try:
+            list(genai.list_models())
+            checks["gemini"] = "ok"
+        except Exception as e:
+            logger.warning("Health check — Gemini API unreachable: %s", e)
+            checks["gemini"] = f"api_error: {type(e).__name__}"
+            degraded = True
+    else:
+        checks["gemini"] = "disabled"
 
     return HealthResponse(
         status="degraded" if degraded else "healthy",

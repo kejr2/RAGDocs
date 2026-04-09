@@ -87,7 +87,9 @@ function MarkdownMessage({ content }) {
 
 export default function QuerySidebar({ currentDoc, isOpen, onClose, darkMode }) {
   const [query, setQuery] = useState('');
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem('ragdocs_messages') || '[]'); } catch { return []; }
+  });
   const [streaming, setStreaming] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [isResizing, setIsResizing] = useState(false);
@@ -96,9 +98,15 @@ export default function QuerySidebar({ currentDoc, isOpen, onClose, darkMode }) 
   const [copiedMsg, setCopiedMsg] = useState(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const abortRef = useRef(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Persist messages to sessionStorage (survives page refresh within same tab)
+  useEffect(() => {
+    try { sessionStorage.setItem('ragdocs_messages', JSON.stringify(messages)); } catch {}
   }, [messages]);
 
   const addToHistory = useCallback((q) => {
@@ -117,16 +125,23 @@ export default function QuerySidebar({ currentDoc, isOpen, onClose, darkMode }) 
     setShowHistory(false);
     addToHistory(q);
 
-    const userMsg = { role: 'user', content: q };
-    const assistantMsg = { role: 'assistant', content: '', streaming: true, sources: [] };
+    const userMsg = { id: crypto.randomUUID(), role: 'user', content: q };
+    const assistantMsg = { id: crypto.randomUUID(), role: 'assistant', content: '', streaming: true, sources: [] };
     setMessages(prev => [...prev, userMsg, assistantMsg]);
     setStreaming(true);
+
+    // Abort any previous in-flight request, then set new controller
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
       const response = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: q, doc_id: currentDoc?.doc_id || null, top_k: 8 }),
+        signal: controller.signal,
       });
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -135,18 +150,13 @@ export default function QuerySidebar({ currentDoc, isOpen, onClose, darkMode }) 
       const decoder = new TextDecoder();
       let buffer = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
+      const processLines = () => {
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
-
         for (const line of lines) {
           if (!line.startsWith('data:')) continue;
           try {
-            const data = JSON.parse(line.slice(5).trim());
+            const data = JSON.parse(line.replace(/^data:\s*/, ''));
             if (data.token !== undefined) {
               setMessages(prev => {
                 const next = [...prev];
@@ -168,10 +178,36 @@ export default function QuerySidebar({ currentDoc, isOpen, onClose, darkMode }) 
             } else if (data.error) {
               throw new Error(data.error);
             }
-          } catch (_) { /* skip malformed lines */ }
+          } catch (_) { /* skip malformed SSE lines */ }
         }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        processLines();
       }
+      // Flush remaining bytes in the decoder after stream ends
+      buffer += decoder.decode();
+      if (buffer.trim()) processLines();
+
     } catch (err) {
+      if (err.name === 'AbortError') {
+        setMessages(prev => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === 'assistant' && last.streaming) {
+            next[next.length - 1] = {
+              ...last,
+              content: last.content ? last.content + '\n\n_[Request timed out]_' : '_Request timed out_',
+              streaming: false, isError: true,
+            };
+          }
+          return next;
+        });
+        return;
+      }
       // Fallback to non-streaming endpoint
       try {
         const res = await fetch(`${API_BASE}/chat/query`, {
@@ -200,6 +236,7 @@ export default function QuerySidebar({ currentDoc, isOpen, onClose, darkMode }) 
         });
       }
     } finally {
+      clearTimeout(timeoutId);
       setStreaming(false);
     }
   }, [query, streaming, currentDoc, addToHistory]);
@@ -301,8 +338,8 @@ export default function QuerySidebar({ currentDoc, isOpen, onClose, darkMode }) 
             )}
           </div>
         ) : (
-          messages.map((msg, idx) => (
-            <div key={idx} className={`animate-fade-in ${msg.role === 'user' ? 'flex justify-end' : ''}`}>
+          messages.map((msg) => (
+            <div key={msg.id} className={`animate-fade-in ${msg.role === 'user' ? 'flex justify-end' : ''}`}>
               {msg.role === 'user' ? (
                 <div className="max-w-[85%] px-3 py-2 rounded-2xl rounded-tr-sm text-sm"
                      style={{ background: 'var(--accent)', color: '#fff' }}>
@@ -343,14 +380,14 @@ export default function QuerySidebar({ currentDoc, isOpen, onClose, darkMode }) 
                   {/* Message actions */}
                   {!msg.streaming && (
                     <div className="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => copyMessage(idx, msg.content)}
+                      <button onClick={() => copyMessage(msg.id, msg.content)}
                         className="flex items-center gap-1 text-xs px-2 py-0.5 rounded"
                         style={{ color: 'var(--text-muted)', background: 'var(--bg-surface-2)' }}>
-                        {copiedMsg === idx
+                        {copiedMsg === msg.id
                           ? <><Check className="w-3 h-3" /> Copied</>
                           : <><Copy className="w-3 h-3" /> Copy</>}
                       </button>
-                      {idx === messages.length - 1 && (
+                      {msg.id === messages[messages.length - 1]?.id && (
                         <button onClick={handleRetry}
                           className="flex items-center gap-1 text-xs px-2 py-0.5 rounded"
                           style={{ color: 'var(--text-muted)', background: 'var(--bg-surface-2)' }}>
@@ -410,7 +447,7 @@ export default function QuerySidebar({ currentDoc, isOpen, onClose, darkMode }) 
             </p>
             <div className="max-h-40 overflow-y-auto">
               {history.slice(0, 8).map((h, i) => (
-                <button key={i}
+                <button key={h}
                   onClick={() => { setQuery(h); setShowHistory(false); textareaRef.current?.focus(); }}
                   className="w-full text-left px-3 py-1.5 text-xs truncate hover:opacity-80"
                   style={{

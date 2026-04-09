@@ -71,8 +71,9 @@ export default function RAGDocsApp() {
     try {
       const response = await fetch(`${API_BASE}/docs/upload`, { method: 'POST', body: formData });
       if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.detail || 'Upload failed');
+        let errMsg = 'Upload failed';
+        try { errMsg = (await response.json()).detail || errMsg; } catch {}
+        throw new Error(errMsg);
       }
       const result = await response.json();
       const docWithDate = { ...result, uploadedAt: new Date().toISOString() };
