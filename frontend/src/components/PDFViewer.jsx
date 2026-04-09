@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize, AlignCenter } from 'lucide-react';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 import 'react-pdf/dist/esm/Page/TextLayer.css';
 
-// Set up PDF.js worker
 if (typeof window !== 'undefined') {
   pdfjs.GlobalWorkerOptions.workerSrc = new URL(
     'pdfjs-dist/build/pdf.worker.min.js',
@@ -12,130 +11,171 @@ if (typeof window !== 'undefined') {
   ).toString();
 }
 
-export default function PDFViewer({ fileUrl, filename }) {
+export default function PDFViewer({ fileUrl, filename, darkMode }) {
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [scale, setScale] = useState(1.2);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [pageInput, setPageInput] = useState('');
+  const containerRef = useRef(null);
+  const pageRef = useRef(null);
 
   function onDocumentLoadSuccess({ numPages }) {
     setNumPages(numPages);
     setLoading(false);
-    setError(null);
   }
 
-  function onDocumentLoadError(error) {
+  function onDocumentLoadError(err) {
     setError('Failed to load PDF');
     setLoading(false);
-    console.error('PDF load error:', error);
   }
 
-  const goToPrevPage = () => {
-    setPageNumber(page => Math.max(1, page - 1));
+  const goTo = (n) => setPageNumber(Math.max(1, Math.min(numPages || 1, n)));
+
+  const handlePageInput = (e) => {
+    const val = e.target.value;
+    setPageInput(val);
+    const n = parseInt(val, 10);
+    if (!isNaN(n) && n >= 1 && numPages && n <= numPages) goTo(n);
   };
 
-  const goToNextPage = () => {
-    setPageNumber(page => Math.min(numPages, page + 1));
+  const fitWidth = () => {
+    if (!containerRef.current) return;
+    const containerWidth = containerRef.current.clientWidth - 64;
+    const pageWidthPt = 595; // A4 approx
+    setScale(containerWidth / pageWidthPt);
   };
 
-  const zoomIn = () => {
-    setScale(scale => Math.min(3, scale + 0.2));
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      containerRef.current?.requestFullscreen?.();
+    } else {
+      document.exitFullscreen?.();
+    }
   };
 
-  const zoomOut = () => {
-    setScale(scale => Math.max(0.5, scale - 0.2));
-  };
-
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-full bg-gray-50">
-        <div className="text-center">
-          <p className="text-red-600 mb-2">Failed to load PDF</p>
-          <p className="text-sm text-gray-500">{error}</p>
-        </div>
+  if (error) return (
+    <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-base)' }}>
+      <div className="text-center">
+        <p className="font-medium mb-1" style={{ color: '#f87171' }}>Failed to load PDF</p>
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{error}</p>
       </div>
-    );
-  }
+    </div>
+  );
 
   return (
-    <div className="flex flex-col h-full bg-gray-50 overflow-hidden">
-      {/* PDF Viewer Controls */}
-      <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={goToPrevPage}
-              disabled={pageNumber <= 1}
-              className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <ChevronLeft className="w-5 h-5 text-gray-700" />
-            </button>
-            <span className="text-sm font-medium text-gray-700 min-w-[80px] text-center">
-              {pageNumber} / {numPages || '--'}
+    <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--bg-base)' }}>
+      {/* Controls bar */}
+      <div className="px-4 py-2.5 border-b flex items-center gap-3 flex-shrink-0"
+           style={{ background: 'var(--bg-surface)', borderColor: 'var(--border)' }}>
+
+        {/* Page nav */}
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => goTo(pageNumber - 1)} disabled={pageNumber <= 1}
+            className="p-1.5 rounded-lg disabled:opacity-30"
+            style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              value={pageInput || pageNumber}
+              min={1}
+              max={numPages || 1}
+              onChange={handlePageInput}
+              onFocus={e => { setPageInput(''); e.target.select(); }}
+              onBlur={() => setPageInput('')}
+              className="w-10 text-center text-xs rounded-lg border outline-none py-1"
+              style={{
+                background: 'var(--bg-surface-2)',
+                borderColor: 'var(--border)',
+                color: 'var(--text-primary)',
+              }}
+            />
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              / {numPages || '--'}
             </span>
-            <button
-              onClick={goToNextPage}
-              disabled={pageNumber >= numPages}
-              className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <ChevronRight className="w-5 h-5 text-gray-700" />
-            </button>
           </div>
-          
-          <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
-            <button
-              onClick={zoomOut}
-              className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
-            >
-              <ZoomOut className="w-4 h-4 text-gray-700" />
-            </button>
-            <span className="text-sm text-gray-600 min-w-[60px] text-center">
-              {Math.round(scale * 100)}%
-            </span>
-            <button
-              onClick={zoomIn}
-              className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
-            >
-              <ZoomIn className="w-4 h-4 text-gray-700" />
-            </button>
-          </div>
+
+          <button onClick={() => goTo(pageNumber + 1)} disabled={!numPages || pageNumber >= numPages}
+            className="p-1.5 rounded-lg disabled:opacity-30"
+            style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
+            <ChevronRight className="w-4 h-4" />
+          </button>
         </div>
 
-        <div className="text-sm text-gray-600 truncate max-w-xs">
-          {filename}
+        {/* Divider */}
+        <div className="w-px h-5" style={{ background: 'var(--border)' }} />
+
+        {/* Zoom controls */}
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => setScale(s => Math.max(0.4, +(s - 0.2).toFixed(1)))}
+            className="p-1.5 rounded-lg"
+            style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          <span className="text-xs min-w-[44px] text-center"
+                style={{ color: 'var(--text-secondary)' }}>
+            {Math.round(scale * 100)}%
+          </span>
+          <button onClick={() => setScale(s => Math.min(3, +(s + 0.2).toFixed(1)))}
+            className="p-1.5 rounded-lg"
+            style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
+            <ZoomIn className="w-4 h-4" />
+          </button>
         </div>
+
+        {/* Fit width */}
+        <button onClick={fitWidth}
+          className="p-1.5 rounded-lg" title="Fit to width"
+          style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
+          <AlignCenter className="w-4 h-4" />
+        </button>
+
+        {/* Fullscreen */}
+        <button onClick={toggleFullscreen}
+          className="p-1.5 rounded-lg" title="Fullscreen"
+          style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
+          <Maximize className="w-4 h-4" />
+        </button>
+
+        <span className="ml-auto text-xs truncate max-w-[200px]"
+              style={{ color: 'var(--text-muted)' }}>
+          {filename}
+        </span>
       </div>
 
-      {/* PDF Content - Independent scroll area */}
-      <div className="flex-1 overflow-auto p-4 flex justify-center min-h-0">
+      {/* PDF Canvas */}
+      <div ref={containerRef}
+           className="flex-1 overflow-auto flex justify-center p-5 min-h-0"
+           style={{ background: 'var(--bg-base)' }}>
         {loading && (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-              <p className="text-gray-600">Loading PDF...</p>
+              <div className="w-10 h-10 border-2 border-t-[var(--accent)] rounded-full animate-spin mx-auto mb-3"
+                   style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading PDF…</p>
             </div>
           </div>
         )}
-        
+
         {fileUrl && (
-          <div className="bg-white shadow-lg rounded-lg p-4">
+          <div ref={pageRef}
+               className="rounded-xl overflow-hidden shadow-xl"
+               style={{ background: '#fff', display: loading ? 'none' : 'block' }}>
             <Document
               file={fileUrl}
               onLoadSuccess={onDocumentLoadSuccess}
               onLoadError={onDocumentLoadError}
-              loading={
-                <div className="flex items-center justify-center h-96">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                </div>
-              }
+              loading={null}
             >
               <Page
                 pageNumber={pageNumber}
                 scale={scale}
                 renderTextLayer={true}
                 renderAnnotationLayer={true}
-                className="shadow-md"
               />
             </Document>
           </div>
@@ -144,4 +184,3 @@ export default function PDFViewer({ fileUrl, filename }) {
     </div>
   );
 }
-
