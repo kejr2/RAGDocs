@@ -1,320 +1,469 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader, MessageSquare, Code, FileText, X, GripVertical } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  Send, X, Code, FileText, Copy, Check, RotateCcw,
+  Trash2, Clock, Zap, MessageSquare
+} from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/github-dark.css';
 import { API_BASE } from '../config';
 
-export default function QuerySidebar({ currentDoc, onQuery, isOpen, onClose }) {
-  const [query, setQuery] = useState('');
-  const [messages, setMessages] = useState([]);
-  const [querying, setQuerying] = useState(false);
-  const [isResizing, setIsResizing] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(384); // Default 384px (w-96)
-  const chatEndRef = useRef(null);
-  const sidebarRef = useRef(null);
+const HISTORY_KEY = 'ragdocs_query_history';
+const MAX_HISTORY = 20;
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+const SUGGESTIONS = [
+  'How do I get started?',
+  'What are the main concepts?',
+  'Show me a code example',
+  'Explain the architecture',
+];
 
-  // Handle resizing
-  useEffect(() => {
-    const handleMouseMove = (e) => {
-      if (!isResizing) return;
-      const newWidth = window.innerWidth - e.clientX;
-      // Clamp width between 300px and 800px
-      const clampedWidth = Math.max(300, Math.min(800, newWidth));
-      setSidebarWidth(clampedWidth);
-    };
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; }
+}
+function saveHistory(h) {
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(h.slice(0, MAX_HISTORY))); } catch {}
+}
 
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
+function CodeBlock({ children, className }) {
+  const [copied, setCopied] = useState(false);
+  const code = String(children).replace(/\n$/, '');
+  const lang = className?.replace('language-', '') || '';
 
-    if (isResizing) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-    }
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-  }, [isResizing]);
-
-  // Extract and render code blocks from text
-  const renderMessageContent = (content) => {
-    if (!content) return '';
-
-    // Split content by code blocks (```language\ncode\n```)
-    const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
-    const parts = [];
-    let lastIndex = 0;
-    let match;
-
-    while ((match = codeBlockRegex.exec(content)) !== null) {
-      // Add text before code block
-      if (match.index > lastIndex) {
-        const textContent = content.substring(lastIndex, match.index);
-        if (textContent.trim()) {
-          parts.push({ type: 'text', content: textContent });
-        }
-      }
-
-      // Add code block
-      parts.push({
-        type: 'code',
-        language: match[1] || 'text',
-        content: match[2],
-      });
-
-      lastIndex = match.index + match[0].length;
-    }
-
-    // Add remaining text
-    if (lastIndex < content.length) {
-      const textContent = content.substring(lastIndex);
-      if (textContent.trim()) {
-        parts.push({ type: 'text', content: textContent });
-      }
-    }
-
-    // If no code blocks found, return original content as text
-    if (parts.length === 0) {
-      parts.push({ type: 'text', content });
-    }
-
-    return parts;
+  const copy = () => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
-
-  const handleQuery = async () => {
-    if (!query.trim() || querying || !currentDoc) return;
-
-    const userMessage = { role: 'user', content: query };
-    setMessages(prev => [...prev, userMessage]);
-    setQuery('');
-    setQuerying(true);
-
-    try {
-      const response = await fetch(`${API_BASE}/chat/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: userMessage.content,
-          doc_id: currentDoc?.doc_id,
-          top_k: 5,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Query failed');
-      }
-
-      const result = await response.json();
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: result.answer,
-        sources: result.sources,
-      }]);
-    } catch (error) {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `Error: ${error.message}`,
-        isError: true,
-      }]);
-    } finally {
-      setQuerying(false);
-    }
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleQuery();
-    }
-  };
-
-  if (!isOpen) return null;
 
   return (
-    <div 
-      ref={sidebarRef}
-      className="bg-white border-l border-gray-200 flex flex-col shadow-xl h-full relative"
-      style={{ width: `${sidebarWidth}px`, minWidth: '300px', maxWidth: '800px' }}
-    >
-      {/* Resize handle */}
-      <div
-        onMouseDown={(e) => {
-          e.preventDefault();
-          setIsResizing(true);
-        }}
-        className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-500 transition-colors z-10"
-        style={{ cursor: 'col-resize' }}
-      >
-        <div className="absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2">
-          <GripVertical className="w-4 h-4 text-gray-400" />
-        </div>
-      </div>
-
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-blue-50 to-indigo-50 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="w-5 h-5 text-blue-600" />
-          <h3 className="font-semibold text-gray-900">Query Assistant</h3>
-        </div>
-        <button
-          onClick={onClose}
-          className="p-1 rounded-lg hover:bg-gray-200 transition-colors"
-        >
-          <X className="w-4 h-4 text-gray-600" />
+    <div className="relative my-2 rounded-xl overflow-hidden border"
+         style={{ borderColor: 'var(--border)', background: '#0f172a' }}>
+      <div className="flex items-center justify-between px-3 py-1.5"
+           style={{ borderBottom: '1px solid var(--border)' }}>
+        <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{lang || 'code'}</span>
+        <button onClick={copy}
+          className="flex items-center gap-1 text-xs px-2 py-0.5 rounded"
+          style={{ color: copied ? '#4ade80' : 'var(--text-muted)', background: 'var(--bg-surface-2)' }}>
+          {copied ? <><Check className="w-3 h-3" /> Copied</> : <><Copy className="w-3 h-3" /> Copy</>}
         </button>
       </div>
+      <pre style={{ margin: 0, background: 'transparent', padding: '1rem' }}>
+        <code className={className}>{code}</code>
+      </pre>
+    </div>
+  );
+}
 
-      {/* Messages - Independent scroll area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
-        {messages.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center max-w-sm">
-              <MessageSquare className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-              <h4 className="text-sm font-semibold text-gray-700 mb-2">
-                Ask about your document
-              </h4>
-              <p className="text-xs text-gray-500">
-                Type your question below to get AI-powered answers based on your uploaded document.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <>
-            {messages.map((msg, idx) => {
-              const contentParts = renderMessageContent(msg.content);
-              
+function MarkdownMessage({ content }) {
+  return (
+    <div className="prose-dark text-sm leading-relaxed">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={{
+          code({ node, inline, className, children, ...props }) {
+            if (inline) {
               return (
-                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[90%] ${msg.role === 'user' ? 'w-auto' : 'w-full'}`}>
-                    <div className={`
-                      rounded-lg px-3 py-2 text-sm
-                      ${msg.role === 'user' 
-                        ? 'bg-blue-600 text-white' 
-                        : msg.isError
-                          ? 'bg-red-50 text-red-900 border border-red-200'
-                          : 'bg-gray-50 text-gray-900 border border-gray-200'
-                      }
-                    `}>
-                      {/* Render content parts */}
-                      <div className="space-y-2">
-                        {contentParts.map((part, partIdx) => {
-                          if (part.type === 'code') {
-                            return (
-                              <div key={partIdx} className="mt-2">
-                                <div className="flex items-center justify-between mb-1">
-                                  <span className="text-xs font-mono text-gray-500">
-                                    {part.language}
-                                  </span>
-                                  <button
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(part.content);
-                                    }}
-                                    className="text-xs text-gray-500 hover:text-gray-700"
-                                    title="Copy code"
-                                  >
-                                    Copy
-                                  </button>
-                                </div>
-                                <pre className={`
-                                  p-3 rounded bg-gray-900 text-gray-100 
-                                  overflow-x-auto text-xs font-mono
-                                  whitespace-pre-wrap break-words
-                                  ${msg.role === 'user' ? 'bg-gray-800' : ''}
-                                `}>
-                                  <code className={`language-${part.language}`}>
-                                    {part.content}
-                                  </code>
-                                </pre>
-                              </div>
-                            );
-                          } else {
-                            return (
-                              <div 
-                                key={partIdx} 
-                                className="whitespace-pre-wrap break-words leading-relaxed"
-                                style={{ wordWrap: 'break-word', overflowWrap: 'break-word' }}
-                              >
-                                {part.content}
-                              </div>
-                            );
-                          }
-                        })}
-                      </div>
-                    </div>
-                    
-                    {msg.sources && msg.sources.length > 0 && (
-                      <div className="mt-2 space-y-1">
-                        {msg.sources.slice(0, 2).map((source, sidx) => (
-                          <div key={sidx} className="bg-white rounded border border-gray-200 p-2 text-xs">
-                            <div className="flex items-center gap-1 mb-1">
-                              {source.metadata.type === 'code' ? (
-                                <Code className="w-3 h-3 text-blue-600" />
-                              ) : (
-                                <FileText className="w-3 h-3 text-gray-600" />
-                              )}
-                              <span className="font-medium text-gray-700 truncate">
-                                {source.metadata.heading || 'No heading'}
-                              </span>
-                              <span className="text-gray-400 ml-auto flex-shrink-0">
-                                {(source.relevance_score * 100).toFixed(0)}%
-                              </span>
-                            </div>
-                            <p className="text-gray-600 line-clamp-2 break-words">
-                              {source.content.substring(0, 100)}...
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <code className="px-1 py-0.5 rounded text-xs"
+                      style={{ background: 'var(--bg-surface-2)', color: '#e879f9', border: '1px solid var(--border)' }}
+                      {...props}>
+                  {children}
+                </code>
               );
-            })}
+            }
+            return <CodeBlock className={className}>{children}</CodeBlock>;
+          },
+          pre({ children }) { return <>{children}</>; },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
-            {querying && (
-              <div className="flex justify-start">
-                <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 flex items-center gap-2">
-                  <Loader className="w-3 h-3 animate-spin text-blue-600" />
-                  <span className="text-xs text-gray-600">Thinking...</span>
-                </div>
-              </div>
-            )}
+export default function QuerySidebar({ currentDoc, isOpen, onClose, darkMode }) {
+  const [query, setQuery] = useState('');
+  const [messages, setMessages] = useState([]);
+  const [streaming, setStreaming] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(420);
+  const [isResizing, setIsResizing] = useState(false);
+  const [history, setHistory] = useState(loadHistory);
+  const [showHistory, setShowHistory] = useState(false);
+  const [copiedMsg, setCopiedMsg] = useState(null);
+  const messagesEndRef = useRef(null);
+  const textareaRef = useRef(null);
 
-            <div ref={chatEndRef} />
-          </>
-        )}
-      </div>
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
-      {/* Input - Fixed at bottom */}
-      <div className="border-t border-gray-200 bg-white p-4 flex-shrink-0">
-        <div className="flex gap-2">
-          <textarea
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder={currentDoc ? "Ask about the document..." : "Select a document first..."}
-            disabled={!currentDoc || querying}
-            rows={3}
-            className="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed resize-none break-words"
-            style={{ wordWrap: 'break-word', overflowWrap: 'break-word' }}
-          />
-          <button
-            onClick={handleQuery}
-            disabled={!currentDoc || !query.trim() || querying}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-1 self-end"
-          >
-            <Send className="w-4 h-4" />
+  const addToHistory = useCallback((q) => {
+    setHistory(prev => {
+      const next = [q, ...prev.filter(h => h !== q)].slice(0, MAX_HISTORY);
+      saveHistory(next);
+      return next;
+    });
+  }, []);
+
+  const sendQuery = useCallback(async (queryText) => {
+    const q = (queryText || query).trim();
+    if (!q || streaming) return;
+
+    setQuery('');
+    setShowHistory(false);
+    addToHistory(q);
+
+    const userMsg = { role: 'user', content: q };
+    const assistantMsg = { role: 'assistant', content: '', streaming: true, sources: [] };
+    setMessages(prev => [...prev, userMsg, assistantMsg]);
+    setStreaming(true);
+
+    try {
+      const response = await fetch(`${API_BASE}/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, doc_id: currentDoc?.doc_id || null, top_k: 8 }),
+      });
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          try {
+            const data = JSON.parse(line.slice(5).trim());
+            if (data.token !== undefined) {
+              setMessages(prev => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last?.role === 'assistant') {
+                  next[next.length - 1] = { ...last, content: last.content + data.token };
+                }
+                return next;
+              });
+            } else if (data.done) {
+              setMessages(prev => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last?.role === 'assistant') {
+                  next[next.length - 1] = { ...last, streaming: false, sources: data.sources || [] };
+                }
+                return next;
+              });
+            } else if (data.error) {
+              throw new Error(data.error);
+            }
+          } catch (_) { /* skip malformed lines */ }
+        }
+      }
+    } catch (err) {
+      // Fallback to non-streaming endpoint
+      try {
+        const res = await fetch(`${API_BASE}/chat/query`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q, doc_id: currentDoc?.doc_id || null, top_k: 8 }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Query failed');
+        setMessages(prev => {
+          const next = [...prev];
+          next[next.length - 1] = {
+            role: 'assistant', content: data.answer,
+            streaming: false, sources: data.sources || []
+          };
+          return next;
+        });
+      } catch (fallbackErr) {
+        setMessages(prev => {
+          const next = [...prev];
+          next[next.length - 1] = {
+            role: 'assistant', content: `Error: ${fallbackErr.message}`,
+            streaming: false, isError: true, sources: []
+          };
+          return next;
+        });
+      }
+    } finally {
+      setStreaming(false);
+    }
+  }, [query, streaming, currentDoc, addToHistory]);
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuery(); }
+  };
+
+  const handleRetry = () => {
+    const lastUser = [...messages].reverse().find(m => m.role === 'user');
+    if (lastUser) { setMessages(prev => prev.slice(0, -2)); sendQuery(lastUser.content); }
+  };
+
+  const copyMessage = (idx, content) => {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopiedMsg(idx); setTimeout(() => setCopiedMsg(null), 2000);
+    });
+  };
+
+  // Drag resize
+  const startResize = (e) => {
+    e.preventDefault();
+    setIsResizing(true);
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    const onMove = (me) => setSidebarWidth(Math.max(320, Math.min(800, startW + startX - me.clientX)));
+    const onUp = () => { setIsResizing(false); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
+  const hasMessages = messages.length > 0;
+
+  return (
+    <div className="relative flex flex-col h-full flex-shrink-0 border-l"
+         style={{ width: sidebarWidth, background: 'var(--bg-surface)', borderColor: 'var(--border)' }}>
+
+      {/* Resize handle */}
+      <div
+        className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 transition-colors"
+        style={{ background: isResizing ? 'var(--accent)' : 'transparent' }}
+        onMouseDown={startResize}
+        onMouseEnter={e => { e.currentTarget.style.background = 'var(--accent)'; }}
+        onMouseLeave={e => { if (!isResizing) e.currentTarget.style.background = 'transparent'; }}
+      />
+
+      {/* Header */}
+      <div className="px-4 py-3 border-b flex items-center justify-between flex-shrink-0"
+           style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center gap-2">
+          <MessageSquare className="w-4 h-4" style={{ color: 'var(--accent)' }} />
+          <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>AI Assistant</span>
+          {currentDoc && (
+            <span className="text-xs px-2 py-0.5 rounded-full max-w-[120px] truncate"
+                  style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+              {currentDoc.filename}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          {hasMessages && (
+            <button onClick={() => setMessages([])}
+              className="p-1.5 rounded-lg" title="Clear conversation"
+              style={{ color: 'var(--text-muted)', background: 'var(--bg-surface-2)' }}>
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button onClick={onClose} className="p-1.5 rounded-lg"
+            style={{ color: 'var(--text-muted)', background: 'var(--bg-surface-2)' }}>
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 min-h-0">
+        {!hasMessages ? (
+          <div className="space-y-4 animate-fade-in">
+            <div className="text-center py-6">
+              <Zap className="w-8 h-8 mx-auto mb-2 opacity-20" />
+              <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                {currentDoc ? 'Ask anything about this document' : 'Upload a document to start'}
+              </p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                Responses stream in real time
+              </p>
+            </div>
+            {currentDoc && (
+              <div className="grid grid-cols-2 gap-2">
+                {SUGGESTIONS.map(s => (
+                  <button key={s}
+                    onClick={() => sendQuery(s)}
+                    className="text-left px-3 py-2.5 rounded-xl text-xs border transition-all hover:opacity-80"
+                    style={{ background: 'var(--bg-surface-2)', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          messages.map((msg, idx) => (
+            <div key={idx} className={`animate-fade-in ${msg.role === 'user' ? 'flex justify-end' : ''}`}>
+              {msg.role === 'user' ? (
+                <div className="max-w-[85%] px-3 py-2 rounded-2xl rounded-tr-sm text-sm"
+                     style={{ background: 'var(--accent)', color: '#fff' }}>
+                  {msg.content}
+                </div>
+              ) : (
+                <div className="group">
+                  <div className="rounded-2xl rounded-tl-sm px-3 py-2.5 border"
+                       style={{
+                         background: msg.isError ? 'rgba(239,68,68,0.08)' : 'var(--bg-surface-2)',
+                         borderColor: msg.isError ? 'rgba(239,68,68,0.25)' : 'var(--border)',
+                       }}>
+                    {msg.streaming ? (
+                      <div className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                        {msg.content ? (
+                          <>
+                            {msg.content}
+                            <span className="inline-block w-0.5 h-4 ml-0.5 align-text-bottom animate-cursor-blink"
+                                  style={{ background: 'var(--accent)' }} />
+                          </>
+                        ) : (
+                          <span className="flex items-center gap-2" style={{ color: 'var(--text-muted)' }}>
+                            <span className="flex gap-1">
+                              {[0, 150, 300].map(d => (
+                                <span key={d} className="w-1.5 h-1.5 rounded-full animate-bounce inline-block"
+                                      style={{ background: 'var(--accent)', animationDelay: `${d}ms` }} />
+                              ))}
+                            </span>
+                            Thinking…
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <MarkdownMessage content={msg.content} />
+                    )}
+                  </div>
+
+                  {/* Message actions */}
+                  {!msg.streaming && (
+                    <div className="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => copyMessage(idx, msg.content)}
+                        className="flex items-center gap-1 text-xs px-2 py-0.5 rounded"
+                        style={{ color: 'var(--text-muted)', background: 'var(--bg-surface-2)' }}>
+                        {copiedMsg === idx
+                          ? <><Check className="w-3 h-3" /> Copied</>
+                          : <><Copy className="w-3 h-3" /> Copy</>}
+                      </button>
+                      {idx === messages.length - 1 && (
+                        <button onClick={handleRetry}
+                          className="flex items-center gap-1 text-xs px-2 py-0.5 rounded"
+                          style={{ color: 'var(--text-muted)', background: 'var(--bg-surface-2)' }}>
+                          <RotateCcw className="w-3 h-3" /> Retry
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Sources */}
+                  {!msg.streaming && msg.sources?.length > 0 && (
+                    <div className="mt-2 space-y-1.5">
+                      <p className="text-xs font-medium px-1" style={{ color: 'var(--text-muted)' }}>
+                        {msg.sources.length} source{msg.sources.length !== 1 ? 's' : ''}
+                      </p>
+                      {msg.sources.slice(0, 3).map((src, si) => (
+                        <div key={si} className="rounded-xl p-2.5 border text-xs"
+                             style={{ background: 'var(--bg-surface)', borderColor: 'var(--border)' }}>
+                          <div className="flex items-center gap-2 mb-1">
+                            {src.metadata?.type === 'code'
+                              ? <Code className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--accent)' }} />
+                              : <FileText className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--text-muted)' }} />}
+                            <span className="font-medium truncate flex-1" style={{ color: 'var(--text-secondary)' }}>
+                              {src.metadata?.heading || src.metadata?.source_file || 'Source'}
+                            </span>
+                            <span className="flex-shrink-0 px-1.5 py-0.5 rounded-full font-medium"
+                                  style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                              {Math.round((src.relevance_score || 0) * 100)}%
+                            </span>
+                          </div>
+                          <p style={{ color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                            {src.content?.slice(0, 200)}{src.content?.length > 200 ? '…' : ''}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input area */}
+      <div className="px-3 pb-3 pt-2 border-t flex-shrink-0"
+           style={{ borderColor: 'var(--border)' }}>
+
+        {/* History dropdown */}
+        {showHistory && history.length > 0 && (
+          <div className="mb-2 rounded-xl border overflow-hidden shadow-lg animate-fade-in"
+               style={{ background: 'var(--bg-surface)', borderColor: 'var(--border)' }}>
+            <p className="text-xs font-medium px-3 py-1.5 border-b"
+               style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+              Recent queries
+            </p>
+            <div className="max-h-40 overflow-y-auto">
+              {history.slice(0, 8).map((h, i) => (
+                <button key={i}
+                  onClick={() => { setQuery(h); setShowHistory(false); textareaRef.current?.focus(); }}
+                  className="w-full text-left px-3 py-1.5 text-xs truncate hover:opacity-80"
+                  style={{
+                    color: 'var(--text-secondary)',
+                    borderBottom: i < Math.min(7, history.length - 1) ? '1px solid var(--border)' : 'none'
+                  }}>
+                  {h}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-2 items-end">
+          <div className="flex-1 relative">
+            {history.length > 0 && (
+              <button
+                onClick={() => setShowHistory(s => !s)}
+                className="absolute right-2 top-2 p-0.5 rounded"
+                style={{ color: showHistory ? 'var(--accent)' : 'var(--text-muted)' }}
+                title="Query history">
+                <Clock className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <textarea
+              ref={textareaRef}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={!currentDoc || streaming}
+              placeholder={currentDoc ? 'Ask anything… (Enter to send)' : 'Select a document first'}
+              rows={2}
+              className="w-full rounded-xl px-3 py-2.5 pr-8 text-sm resize-none border outline-none"
+              style={{
+                background: 'var(--bg-surface-2)',
+                borderColor: 'var(--border)',
+                color: 'var(--text-primary)',
+              }}
+            />
+          </div>
+          <button
+            onClick={() => sendQuery()}
+            disabled={!currentDoc || !query.trim() || streaming}
+            className="p-2.5 rounded-xl flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ background: 'var(--accent)', color: '#fff' }}>
+            {streaming
+              ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin block" />
+              : <Send className="w-4 h-4" />}
+          </button>
+        </div>
+        <p className="text-xs mt-1 px-1" style={{ color: 'var(--text-muted)' }}>
+          Shift+Enter for newline · Enter to send
+        </p>
       </div>
     </div>
   );

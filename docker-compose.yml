@@ -51,7 +51,7 @@ services:
       QDRANT_GRPC_PORT: 6334
       API_HOST: 0.0.0.0
       API_PORT: 8000
-      GEMINI_API_KEY: AIzaSyCu6SB2b0iWeLWv_MdXcTg6ZVSLE7mnPyw
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: gemini-2.5-flash
     depends_on:
       postgres:
