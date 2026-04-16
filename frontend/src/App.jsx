@@ -1,8 +1,51 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Upload, FileText, Code, Trash2, Loader, Book, MessageSquare,
   Sun, Moon, Search, SortAsc, Globe, FileCode, ChevronDown, X
 } from 'lucide-react';
+
+// ╔══════════════════════════════════════════════════════╗
+// ║  Built with ❤️  by Aditya Kejriwal                   ║
+// ║  Try: ↑ ↑ ↓ ↓ ← → ← → B A                          ║
+// ╚══════════════════════════════════════════════════════╝
+const KONAMI = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'];
+
+function EasterEgg({ onClose }) {
+  return (
+    <div className="fixed inset-0 z-[999] flex items-center justify-center"
+         style={{ background: 'rgba(0,0,0,0.85)' }}
+         onClick={onClose}>
+      <div className="relative text-center p-10 rounded-2xl border max-w-sm w-full mx-4 animate-fade-in"
+           style={{ background: 'var(--bg-surface)', borderColor: 'var(--accent)' }}
+           onClick={e => e.stopPropagation()}>
+        <div className="text-5xl mb-4">🚀</div>
+        <h2 className="text-2xl font-bold mb-1" style={{ color: 'var(--accent)' }}>
+          Hey, you found me!
+        </h2>
+        <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>
+          Built with love by
+        </p>
+        <p className="text-3xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
+          Aditya Kejriwal
+        </p>
+        <p className="text-xs mb-6" style={{ color: 'var(--text-muted)' }}>
+          github.com/kejr2
+        </p>
+        <div className="text-xs px-3 py-1.5 rounded-full inline-block mb-6"
+             style={{ background: 'var(--bg-surface-2)', color: 'var(--text-muted)' }}>
+          ↑ ↑ ↓ ↓ ← → ← → B A
+        </div>
+        <div>
+          <button onClick={onClose}
+            className="px-6 py-2 rounded-lg text-sm font-medium text-white"
+            style={{ background: 'var(--accent)' }}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 import { useDropzone } from 'react-dropzone';
 import toast, { Toaster } from 'react-hot-toast';
 import PDFViewer from './components/PDFViewer';
@@ -39,7 +82,25 @@ export default function RAGDocsApp() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
+  const [showEasterEgg, setShowEasterEgg] = useState(false);
+  const konamiProgress = useRef(0);
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === KONAMI[konamiProgress.current]) {
+        konamiProgress.current += 1;
+        if (konamiProgress.current === KONAMI.length) {
+          konamiProgress.current = 0;
+          setShowEasterEgg(true);
+        }
+      } else {
+        konamiProgress.current = e.key === KONAMI[0] ? 1 : 0;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   // Apply dark mode to html element
   React.useEffect(() => {
@@ -149,6 +210,7 @@ export default function RAGDocsApp() {
   return (
     <div className={`h-screen flex overflow-hidden ${darkMode ? 'dark' : ''}`}
          style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}>
+      {showEasterEgg && <EasterEgg onClose={() => setShowEasterEgg(false)} />}
       <Toaster
         position="bottom-right"
         toastOptions={{

@@ -75,3 +75,16 @@ async def health_check(db: Session = Depends(get_db)) -> HealthResponse:
         gemini_enabled=gemini_service.enabled,
         checks=checks
     )
+
+
+# ╔══════════════════════════════════════════════════╗
+# ║  You found the easter egg! Built by Aditya K.   ║
+# ╚══════════════════════════════════════════════════╝
+@router.get("/_/whoami", include_in_schema=False)
+async def whoami():
+    return {
+        "builder": "Aditya Kejriwal",
+        "github": "github.com/kejr2",
+        "message": "You found the easter egg 🥚 — nice curiosity!",
+        "stack": ["FastAPI", "Qdrant", "Gemini", "React", "Sentence Transformers"],
+    }
