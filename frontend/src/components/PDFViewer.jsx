@@ -1,6 +1,6 @@
-import React, { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize, AlignCenter } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, AlignCenter, Maximize } from 'lucide-react';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 import 'react-pdf/dist/esm/Page/TextLayer.css';
 
@@ -11,175 +11,213 @@ if (typeof window !== 'undefined') {
   ).toString();
 }
 
-export default function PDFViewer({ fileUrl, filename, darkMode }) {
-  const [numPages, setNumPages] = useState(null);
-  const [pageNumber, setPageNumber] = useState(1);
-  const [scale, setScale] = useState(1.2);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [pageInput, setPageInput] = useState('');
+export default function PDFViewer({ fileUrl, filename, jumpTarget }) {
+  const [numPages,     setNumPages]     = useState(null);
+  const [currentPage,  setCurrentPage]  = useState(1);
+  const [scale,        setScale]        = useState(1.2);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState(null);
   const containerRef = useRef(null);
-  const pageRef = useRef(null);
+  const pageRefs     = useRef([]);
 
-  function onDocumentLoadSuccess({ numPages }) {
-    setNumPages(numPages);
+  /* ─── Document loaded ──────────────────────────────────────────────── */
+  const onDocumentLoadSuccess = ({ numPages: n }) => {
+    setNumPages(n);
+    pageRefs.current = new Array(n).fill(null);
     setLoading(false);
-  }
+  };
 
-  function onDocumentLoadError(err) {
+  const onDocumentLoadError = () => {
     setError('Failed to load PDF');
     setLoading(false);
-  }
-
-  const goTo = (n) => setPageNumber(Math.max(1, Math.min(numPages || 1, n)));
-
-  const handlePageInput = (e) => {
-    const val = e.target.value;
-    setPageInput(val);
-    const n = parseInt(val, 10);
-    if (!isNaN(n) && n >= 1 && numPages && n <= numPages) goTo(n);
   };
 
+  /* ─── Navigate by scroll ───────────────────────────────────────────── */
+  const scrollToPage = (n) => {
+    const target = Math.max(1, Math.min(numPages || 1, n));
+    setCurrentPage(target);
+    const el = pageRefs.current[target - 1];
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  /* ─── Track visible page while scrolling ──────────────────────────── */
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !numPages) return;
+
+    const handler = () => {
+      const containerTop = container.getBoundingClientRect().top;
+      for (let i = 0; i < numPages; i++) {
+        const el = pageRefs.current[i];
+        if (!el) continue;
+        const { bottom } = el.getBoundingClientRect();
+        if (bottom > containerTop + 40) {
+          setCurrentPage(i + 1);
+          break;
+        }
+      }
+    };
+
+    container.addEventListener('scroll', handler, { passive: true });
+    return () => container.removeEventListener('scroll', handler);
+  }, [numPages]);
+
+  /* ─── Jump to page from citation click ────────────────────────────── */
+  useEffect(() => {
+    if (!jumpTarget || !jumpTarget.ts) return;
+    const page = jumpTarget.page;
+    if (!page || page < 1) return;
+    const clamped = Math.max(1, Math.min(numPages || 1, page));
+    scrollToPage(clamped);
+
+    // Flash the page with volt-green outline
+    const el = pageRefs.current[clamped - 1];
+    if (el) {
+      el.classList.remove('pdf-page-flash');
+      // Force reflow so re-adding the class re-triggers the animation
+      void el.offsetWidth;
+      el.classList.add('pdf-page-flash');
+      setTimeout(() => el.classList.remove('pdf-page-flash'), 950);
+    }
+  }, [jumpTarget?.ts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ─── Fit width ────────────────────────────────────────────────────── */
   const fitWidth = () => {
     if (!containerRef.current) return;
-    const containerWidth = containerRef.current.clientWidth - 64;
-    const pageWidthPt = 595; // A4 approx
-    setScale(containerWidth / pageWidthPt);
+    const w = containerRef.current.clientWidth - 48;
+    setScale(+(w / 595).toFixed(2));
   };
 
+  /* ─── Fullscreen ───────────────────────────────────────────────────── */
   const toggleFullscreen = async () => {
-    try {
-      if (!document.fullscreenElement) await containerRef.current?.requestFullscreen?.();
-      else await document.exitFullscreen?.();
-    } catch {
-      // fullscreen not available or denied — ignore silently
+    if (!document.fullscreenElement) {
+      await containerRef.current?.requestFullscreen?.().catch(() => {});
+    } else {
+      await document.exitFullscreen?.().catch(() => {});
     }
   };
 
+  /* ─── Error state ──────────────────────────────────────────────────── */
   if (error) return (
-    <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-base)' }}>
+    <div className="flex items-center justify-center h-full" style={{ background: 'var(--bg-pdf)' }}>
       <div className="text-center">
-        <p className="font-medium mb-1" style={{ color: '#f87171' }}>Failed to load PDF</p>
+        <p className="font-medium mb-1" style={{ color: 'var(--red)' }}>Failed to load PDF</p>
         <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{error}</p>
       </div>
     </div>
   );
 
   return (
-    <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--bg-base)' }}>
-      {/* Controls bar */}
-      <div className="px-4 py-2.5 border-b flex items-center gap-3 flex-shrink-0"
-           style={{ background: 'var(--bg-surface)', borderColor: 'var(--border)' }}>
+    <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--bg-pdf)' }}>
 
-        {/* Page nav */}
-        <div className="flex items-center gap-1.5">
-          <button onClick={() => goTo(pageNumber - 1)} disabled={pageNumber <= 1}
-            className="p-1.5 rounded-lg disabled:opacity-30"
-            style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
-            <ChevronLeft className="w-4 h-4" />
+      {/* ── Controls bar ─────────────────────────────────────────────── */}
+      <div className="px-4 py-2 border-b flex items-center gap-2.5 flex-shrink-0"
+           style={{ background: 'var(--bg-sidebar)', borderColor: 'var(--border)' }}>
+
+        {/* Page navigation */}
+        <div className="flex items-center gap-1">
+          <button onClick={() => scrollToPage(currentPage - 1)}
+            disabled={currentPage <= 1}
+            className="p-1.5 rounded-lg disabled:opacity-30 transition-opacity"
+            style={{ background: 'var(--bg-card)', color: 'var(--text-secondary)' }}>
+            <ChevronLeft className="w-3.5 h-3.5" />
           </button>
 
-          <div className="flex items-center gap-1">
-            <input
-              type="number"
-              value={pageInput || pageNumber}
-              min={1}
-              max={numPages || 1}
-              onChange={handlePageInput}
-              onFocus={e => { setPageInput(''); e.target.select(); }}
-              onBlur={() => setPageInput('')}
-              className="w-10 text-center text-xs rounded-lg border outline-none py-1"
-              style={{
-                background: 'var(--bg-surface-2)',
-                borderColor: 'var(--border)',
-                color: 'var(--text-primary)',
-              }}
-            />
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              / {numPages || '--'}
-            </span>
-          </div>
+          <span className="text-xs font-mono-ui px-2 min-w-[64px] text-center"
+                style={{ color: 'var(--text-secondary)' }}>
+            {currentPage}
+            <span style={{ color: 'var(--text-faint)' }}> / {numPages || '–'}</span>
+          </span>
 
-          <button onClick={() => goTo(pageNumber + 1)} disabled={!numPages || pageNumber >= numPages}
-            className="p-1.5 rounded-lg disabled:opacity-30"
-            style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
-            <ChevronRight className="w-4 h-4" />
+          <button onClick={() => scrollToPage(currentPage + 1)}
+            disabled={!numPages || currentPage >= numPages}
+            className="p-1.5 rounded-lg disabled:opacity-30 transition-opacity"
+            style={{ background: 'var(--bg-card)', color: 'var(--text-secondary)' }}>
+            <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        {/* Divider */}
-        <div className="w-px h-5" style={{ background: 'var(--border)' }} />
+        <div className="w-px h-4 flex-shrink-0" style={{ background: 'var(--border)' }} />
 
-        {/* Zoom controls */}
-        <div className="flex items-center gap-1.5">
-          <button onClick={() => setScale(s => Math.max(0.4, +(s - 0.2).toFixed(1)))}
+        {/* Zoom */}
+        <div className="flex items-center gap-1">
+          <button onClick={() => setScale(s => Math.max(0.4, +(s - 0.15).toFixed(2)))}
             className="p-1.5 rounded-lg"
-            style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
-            <ZoomOut className="w-4 h-4" />
+            style={{ background: 'var(--bg-card)', color: 'var(--text-secondary)' }}>
+            <ZoomOut className="w-3.5 h-3.5" />
           </button>
-          <span className="text-xs min-w-[44px] text-center"
+          <span className="text-xs font-mono-ui min-w-[42px] text-center"
                 style={{ color: 'var(--text-secondary)' }}>
             {Math.round(scale * 100)}%
           </span>
-          <button onClick={() => setScale(s => Math.min(3, +(s + 0.2).toFixed(1)))}
+          <button onClick={() => setScale(s => Math.min(3.0, +(s + 0.15).toFixed(2)))}
             className="p-1.5 rounded-lg"
-            style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
-            <ZoomIn className="w-4 h-4" />
+            style={{ background: 'var(--bg-card)', color: 'var(--text-secondary)' }}>
+            <ZoomIn className="w-3.5 h-3.5" />
           </button>
         </div>
 
         {/* Fit width */}
-        <button onClick={fitWidth}
-          className="p-1.5 rounded-lg" title="Fit to width"
-          style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
-          <AlignCenter className="w-4 h-4" />
+        <button onClick={fitWidth} title="Fit to width"
+          className="p-1.5 rounded-lg"
+          style={{ background: 'var(--bg-card)', color: 'var(--text-secondary)' }}>
+          <AlignCenter className="w-3.5 h-3.5" />
         </button>
 
         {/* Fullscreen */}
-        <button onClick={toggleFullscreen}
-          className="p-1.5 rounded-lg" title="Fullscreen"
-          style={{ background: 'var(--bg-surface-2)', color: 'var(--text-secondary)' }}>
-          <Maximize className="w-4 h-4" />
+        <button onClick={toggleFullscreen} title="Fullscreen"
+          className="p-1.5 rounded-lg"
+          style={{ background: 'var(--bg-card)', color: 'var(--text-secondary)' }}>
+          <Maximize className="w-3.5 h-3.5" />
         </button>
 
-        <span className="ml-auto text-xs truncate max-w-[200px]"
+        <span className="ml-auto text-xs font-mono-ui truncate max-w-[200px]"
               style={{ color: 'var(--text-muted)' }}>
           {filename}
         </span>
       </div>
 
-      {/* PDF Canvas */}
-      <div ref={containerRef}
-           className="flex-1 overflow-auto flex justify-center p-5 min-h-0"
-           style={{ background: 'var(--bg-base)' }}>
+      {/* ── All pages stacked ─────────────────────────────────────────── */}
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-y-auto min-h-0"
+        style={{ background: 'var(--bg-pdf)' }}
+      >
+        {/* Loading spinner */}
         {loading && (
-          <div className="flex items-center justify-center h-full">
+          <div className="flex items-center justify-center py-24">
             <div className="text-center">
-              <div className="w-10 h-10 border-2 border-t-[var(--accent)] rounded-full animate-spin mx-auto mb-3"
-                   style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
-              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading PDF…</p>
+              <div className="w-10 h-10 border-2 rounded-full animate-spin mx-auto mb-3"
+                   style={{ borderColor: 'var(--border)', borderTopColor: 'var(--volt)' }} />
+              <p className="text-sm font-mono-ui" style={{ color: 'var(--text-muted)' }}>Loading PDF…</p>
             </div>
           </div>
         )}
 
         {fileUrl && (
-          <div ref={pageRef}
-               className="rounded-xl overflow-hidden shadow-xl"
-               style={{ background: '#fff', display: loading ? 'none' : 'block' }}>
-            <Document
-              file={fileUrl}
-              onLoadSuccess={onDocumentLoadSuccess}
-              onLoadError={onDocumentLoadError}
-              loading={null}
-            >
-              <Page
-                pageNumber={pageNumber}
-                scale={scale}
-                renderTextLayer={true}
-                renderAnnotationLayer={true}
-              />
-            </Document>
-          </div>
+          <Document
+            file={fileUrl}
+            onLoadSuccess={onDocumentLoadSuccess}
+            onLoadError={onDocumentLoadError}
+            loading={null}
+            className="flex flex-col items-center py-6 gap-4"
+          >
+            {numPages && Array.from({ length: numPages }, (_, i) => (
+              <div
+                key={i + 1}
+                ref={el => { pageRefs.current[i] = el; }}
+                className="flex-shrink-0 shadow-2xl"
+                style={{ display: loading ? 'none' : 'block' }}
+              >
+                <Page
+                  pageNumber={i + 1}
+                  scale={scale}
+                  renderTextLayer={true}
+                  renderAnnotationLayer={true}
+                />
+              </div>
+            ))}
+          </Document>
         )}
       </div>
     </div>

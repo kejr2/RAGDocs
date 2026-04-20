@@ -119,7 +119,12 @@ async def upload_document(
                         "chunk_id": chunk.chunk_id, "doc_id": chunk.doc_id,
                         "source_file": chunk.source_file, "start": chunk.start,
                         "end": chunk.end, "type": chunk.type,
-                        "heading": chunk.heading or "", "content": chunk.content
+                        "heading": chunk.heading or "",
+                        "content": chunk.content,
+                        "page_number": getattr(chunk, "page_number", 0) or 0,
+                        "section_heading": getattr(chunk, "section_heading", "") or "",
+                        "has_table": getattr(chunk, "has_table", False) or False,
+                        "has_list": getattr(chunk, "has_list", False) or False,
                     }
                 )
                 for chunk, embedding in zip(text_chunks, text_embeddings)
@@ -141,7 +146,11 @@ async def upload_document(
                         "source_file": chunk.source_file, "start": chunk.start,
                         "end": chunk.end, "type": chunk.type,
                         "heading": chunk.heading or "", "language": chunk.language or "",
-                        "content": chunk.content
+                        "content": chunk.content,
+                        "page_number": getattr(chunk, "page_number", 0) or 0,
+                        "section_heading": getattr(chunk, "section_heading", "") or "",
+                        "has_table": getattr(chunk, "has_table", False) or False,
+                        "has_list": getattr(chunk, "has_list", False) or False,
                     }
                 )
                 for chunk, embedding in zip(code_chunks, code_embeddings)
@@ -158,7 +167,11 @@ async def upload_document(
             db.add(ChunkModel(
                 id=chunk.chunk_id, doc_id=chunk.doc_id, source_file=chunk.source_file,
                 content=chunk.content, start=chunk.start, end=chunk.end,
-                chunk_type=chunk.type, heading=chunk.heading or "", language=chunk.language or ""
+                chunk_type=chunk.type, heading=chunk.heading or "", language=chunk.language or "",
+                page_number=getattr(chunk, "page_number", 0) or 0,
+                section_heading=getattr(chunk, "section_heading", "") or "",
+                has_table=getattr(chunk, "has_table", False) or False,
+                has_list=getattr(chunk, "has_list", False) or False,
             ))
         db.commit()
 
