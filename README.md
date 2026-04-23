@@ -1,313 +1,104 @@
-# RAGDocs - Advanced Code Documentation RAG System
+# RAGDocs
 
-<div align="center">
+> Your team's documentation, finally answerable.
+> Ask anything. Get a sourced answer in under 2 seconds.
 
-![RAGDocs Banner](banner-placeholder.png)
+## The Problem
 
-*A fully deployable, production-ready RAG (Retrieval Augmented Generation) system specifically designed for code documentation with intelligent hybrid retrieval and LLM-powered query enhancement.*
+Every engineering team has a hidden tax nobody measures.
+New engineers join and spend their first 2–4 weeks
+interrupting senior devs with questions that already
+have answers — buried in Confluence, API docs, GitHub
+READMEs, and internal wikis.
 
-[![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
-[![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://reactjs.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Qdrant](https://img.shields.io/badge/Qdrant-FF6B6B?style=for-the-badge&logo=qdrant&logoColor=white)](https://qdrant.tech/)
-[![Docker](https://img.shields.io/badge/Docker-2CA5E0?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
+Senior engineers become unpaid support agents.
+New engineers feel lost and slow.
+The knowledge exists. It is just not accessible when
+someone needs it.
 
-</div>
+## Demo
 
----
+[INSERT_LOOM_LINK]
 
-## 🎯 Project Overview
+## Who This Is For
 
-**RAGDocs** is a production-ready, fully deployable RAG system engineered specifically for code documentation. It leverages **dual embedding models** (separate models for code and text), **LLM-powered query enhancement**, **hybrid retrieval**, and **intelligent reranking** to provide highly accurate and contextually relevant answers.
+- Engineering teams onboarding new hires frequently
+- Teams where senior devs are the human search engine
+- Companies with docs across Confluence, Notion, GitHub
+- Anyone tired of "just ask X, he'll know"
 
-### Key Achievements
+## How It Works
 
-✨ **Dual Embedding Architecture**: Specialized models for code (`jinaai/jina-embeddings-v2-base-code`) and text (`all-MiniLM-L6-v2`)  
-✨ **LLM-Powered Query Enhancement**: Gemini AI analyzes queries to optimize vector search strategies  
-✨ **Hybrid Retrieval System**: Intelligently merges results from multiple contexts (text + code)  
-✨ **Advanced Reranking**: Multi-factor relevance scoring with keyword overlap and type boosting  
-✨ **Production-Ready**: Fully containerized with Docker Compose, ready for deployment  
-✨ **Modern UI**: React-based interface with PDF viewer, code blocks, and resizable sidebar  
+Upload your documentation. Ask anything in plain English.
+Get a precise, sourced answer in under 2 seconds — with
+a confidence score so you know how much to trust it.
 
----
+**Flow:**
+Upload docs → Ask question → LLM enhances query →
+Hybrid retrieval → Rerank → Sourced answer + confidence score
 
-## 🏗️ Architecture Highlights
+**What makes it not a basic RAG:**
+- Dual embeddings: separate models for code vs prose
+  (understands your API docs AND your code snippets)
+- LLM query enhancement: rewrites your question before
+  searching so it finds what you meant, not just what you typed
+- Hybrid retrieval + reranking across multiple doc types
+- Confidence scoring: HIGH / MEDIUM / LOW on every answer
+- Hard fallback: refuses to hallucinate if retrieval
+  score is below threshold
+- Click any source citation → PDF scrolls to that exact page
+- Thumbs up/down on every answer feeds a live helpfulness score
+- Honest "I don't know" panel shows you what it can't answer yet
 
-### Dual Embedding Models
-- **Text Embeddings**: `all-MiniLM-L6-v2` for documentation and prose
-- **Code Embeddings**: `jinaai/jina-embeddings-v2-base-code` for code snippets
-- **Intelligent Routing**: Automatically routes queries to appropriate embedding model
+**Stack:**
+FastAPI · Qdrant · PostgreSQL · Gemini 2.5 Flash ·
+React · Docker
 
-### LLM-Powered Query Enhancement
-- **Query Analysis**: Gemini AI analyzes user queries to extract:
-  - Enhanced query variants
-  - Keywords and synonyms
-  - Query type (definition, how-to, example, multi-step)
-  - Required topics for multi-query retrieval
-- **Dynamic Search Strategy**: LLM determines optimal search parameters (top_k, multi-query needs)
+## Live Metrics
 
-### Hybrid Retrieval System
-- **Multi-Context Merging**: Intelligently combines results from:
-  - Text chunks (documentation)
-  - Code chunks (snippets and examples)
-- **Context-Aware Reranking**: Multi-factor scoring:
-  - Semantic similarity scores
-  - Keyword overlap
-  - Type matching (code vs text)
-  - Heading relevance
-  - Language-specific prioritization
+The built-in dashboard tracks everything in real time.
 
-### Advanced Features
-- **Query Caching**: LFU cache for frequently asked questions
-- **Multi-Topic Queries**: Handles complex queries requiring multiple contexts
-- **Language Detection**: Prioritizes code in requested language (Node.js, Python, etc.)
-- **Error Handling**: Robust error handling with fallback mechanisms
+| Metric | What it tells you |
+|--------|-------------------|
+| Avg Response Time | Is it fast enough to actually use? |
+| Retrieval Quality | Is it finding the right chunks? |
+| Fallback Rate | How often it says "I don't know" instead of guessing |
+| Helpfulness % | Thumbs-up/down from real usage |
+| Cost per Query | Exactly what each answer costs in USD |
 
----
+Live at: `http://localhost:3001` → Metrics tab
 
-## 🚀 Quick Start
-
-### Prerequisites
-- Docker and Docker Compose
-- Git
-
-### Installation
+## Set It Up In 10 Minutes
 
 ```bash
-# Clone the repository
-git clone <repository-url>
+git clone <repo-url>
 cd RAGDocs
 
-# Start all services
+# Add your keys
+cp .env.example .env
+# Fill in GOOGLE_API_KEY and DATABASE_URL
+
+# Run everything
 docker compose up -d
 ```
 
-### Access Points
-- **Frontend UI**: http://localhost:3000
-- **Backend API**: http://localhost:8000
-- **API Documentation**: http://localhost:8000/docs
+Frontend: http://localhost:3001  
+API docs: http://localhost:8000/docs  
+Metrics:  http://localhost:3001 → Metrics tab
 
----
+## Roadmap
 
-## 🛠️ Tech Stack
+Things I've deliberately not built yet (and why):
 
-### Backend
-- **FastAPI** - Modern Python web framework
-- **PostgreSQL** - Metadata storage for documents and chunks
-- **Qdrant** - Vector database for semantic search
-- **Gemini AI** - Query enhancement and answer generation
-- **Sentence Transformers** - Dual embedding models
-- **LangChain** - Text processing and chunking
+- **SSO / Okta** — weeks of OAuth work, 0 user value until there are multiple users
+- **Confluence / Notion connectors** — each is a week of OAuth + sync logic
+- **Slack bot** — real value, building post-v1
+- **Multi-tenant RBAC** — needs teams/orgs schema first
+- **Helm chart** — nobody installs from a LinkedIn link
 
-### Frontend
-- **React** - UI framework
-- **Vite** - Build tool
-- **Tailwind CSS** - Styling
-- **React PDF** - PDF viewer
-- **Lucide Icons** - Icon library
+## Want This For Your Team?
 
-### Infrastructure
-- **Docker** - Containerization
-- **Docker Compose** - Multi-container orchestration
-- **Nginx** - Static file serving and API proxying
+Built to be adapted to any team's documentation stack.
+Open an issue or reach me directly:
 
----
-
-## 📊 System Architecture
-
-```
-┌─────────────────┐
-│   Frontend      │
-│   (React)       │
-│   Port: 3000     │
-└────────┬────────┘
-         │
-         │ HTTP/REST
-         │
-┌────────▼────────┐
-│   Backend       │
-│   (FastAPI)     │
-│   Port: 8000    │
-└───┬──────────┬──┘
-    │          │
-    │          │
-┌───▼───┐  ┌──▼────┐
-│ Post  │  │Qdrant │
-│ greSQL│  │Vector │
-│       │  │  DB   │
-└───────┘  └───────┘
-```
-
----
-
-## 🔑 Key Features
-
-### Document Processing
-- ✅ **Multi-format Support**: PDF, Markdown, TXT, HTML
-- ✅ **Intelligent Chunking**: Separate text and code chunks
-- ✅ **Heading Extraction**: Preserves document structure
-- ✅ **Language Detection**: Identifies code language
-
-### Query System
-- ✅ **LLM Query Enhancement**: Optimizes queries before vector search
-- ✅ **Multi-Query Support**: Handles complex, multi-topic queries
-- ✅ **Hybrid Retrieval**: Searches both text and code collections
-- ✅ **Smart Reranking**: Multi-factor relevance scoring
-
-### User Interface
-- ✅ **PDF Viewer**: Full PDF viewing with navigation and zoom
-- ✅ **Text Viewer**: Markdown and code rendering
-- ✅ **Resizable Sidebar**: Adjustable query interface
-- ✅ **Code Blocks**: Syntax-highlighted code snippets
-- ✅ **Responsive Design**: Works on all screen sizes
-
----
-
-## 📁 Project Structure
-
-```
-RAGDocs/
-├── app/                    # FastAPI backend
-│   ├── api/                # API routes
-│   │   ├── chat.py         # Query endpoint
-│   │   ├── docs.py         # Document upload
-│   │   └── debug.py        # Debug endpoints
-│   ├── core/               # Core configuration
-│   │   ├── database.py     # PostgreSQL connection
-│   │   └── qdrant_client.py # Qdrant connection
-│   ├── models/             # Database models
-│   └── services/           # Business logic
-│       ├── embeddings.py   # Dual embedding models
-│       ├── query_enhancer.py # LLM query enhancement
-│       ├── retrieval.py    # Hybrid retrieval
-│       └── gemini.py       # Gemini AI integration
-├── frontend/               # React frontend
-│   ├── src/
-│   │   ├── components/     # React components
-│   │   └── config.js      # API configuration
-│   └── Dockerfile          # Frontend Docker build
-├── docker-compose.yml      # Docker Compose configuration
-└── requirements.txt        # Python dependencies
-```
-
----
-
-## 🎓 Learning Outcomes
-
-### Technical Skills Demonstrated
-- **RAG System Design**: Understanding of retrieval-augmented generation architecture
-- **Vector Databases**: Working with Qdrant for semantic search
-- **Dual Embeddings**: Specialized models for different content types
-- **LLM Integration**: Using Gemini AI for query enhancement
-- **Full-Stack Development**: React frontend + FastAPI backend
-- **Docker**: Containerization and orchestration
-- **Database Design**: PostgreSQL schema design
-
-### Advanced Concepts
-- **Hybrid Retrieval**: Combining multiple search strategies
-- **Query Enhancement**: Using LLMs to improve search quality
-- **Reranking**: Multi-factor relevance scoring
-- **Context Merging**: Intelligently combining multiple contexts
-- **Production Deployment**: Docker Compose setup
-
----
-
-## 📸 Screenshots
-
-<div align="center">
-
-![Application Screenshot](screenshot-placeholder.png)
-
-*Screenshot of the RAGDocs application interface*
-
-</div>
-
----
-
-## 🔧 Configuration
-
-### Environment Variables
-
-#### Backend
-```bash
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_USER=ragdocs
-POSTGRES_PASSWORD=ragdocs_password
-POSTGRES_DB=ragdocs_db
-QDRANT_HOST=qdrant
-QDRANT_PORT=6333
-GEMINI_API_KEY=your_api_key
-GEMINI_MODEL=gemini-2.5-flash
-```
-
-#### Frontend
-```bash
-VITE_API_BASE_URL=http://localhost:8000
-```
-
----
-
-## 📚 API Documentation
-
-Full API documentation available at: http://localhost:8000/docs
-
-### Key Endpoints
-- `POST /docs/upload` - Upload a document
-- `POST /chat/query` - Query the RAG system
-- `GET /docs/chunks/{doc_id}` - Get document chunks
-- `DELETE /docs/documents/{doc_id}` - Delete a document
-
----
-
-## 🚧 Development
-
-### Backend Development
-```bash
-cd app
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
-
-### Frontend Development
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
----
-
-## 📝 Documentation
-
-- [Frontend Setup Guide](FRONTEND_SETUP.md)
-- [Document Types Guide](DOCUMENT_TYPES_GUIDE.md)
-- [Gemini Setup Guide](GEMINI_SETUP.md)
-- [Frontend Docker Guide](FRONTEND_DOCKER.md)
-
----
-
-## 🎯 Future Enhancements
-
-- [ ] Support for more document formats (DOCX, PPTX)
-- [ ] Multi-user support with authentication
-- [ ] Advanced analytics and query tracking
-- [ ] WebSocket support for real-time updates
-- [ ] Multi-language code support expansion
-
----
-
-
-## 👤 Author
-
-**Aditya Kejriwal**
-
----
-
-<div align="center">
-
-**Built with ❤️ using FastAPI, React, and Gemini AI**
-
-⭐ Star this repo if you found it helpful!
-
-</div>
+linkedin.com/in/adityakejriwal02

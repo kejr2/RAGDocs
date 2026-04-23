@@ -278,43 +278,15 @@ async def debug_query(
         if gemini_service.enabled and gemini_service.model:
             print(f"✅ Gemini is enabled")
             print(f"📤 Sending to LLM...\n")
-            
             try:
-                prompt = f"""You are an expert documentation assistant. Your task is to provide accurate, helpful answers based ONLY on the provided context.
-
-CONTEXT FROM DOCUMENTATION:
-{context}
-
-USER QUESTION: {request.query}
-
-IMPORTANT INSTRUCTIONS:
-1. ANSWER STRICTLY BASED ON THE CONTEXT PROVIDED ABOVE. Do not use external knowledge.
-2. If the context contains a direct answer, provide it clearly and concisely.
-3. Include relevant code examples using proper markdown formatting (```language)
-4. If the context doesn't contain enough information, clearly state: "Based on the provided context, I cannot find a complete answer to this question."
-
-ANSWER (based on context only):"""
-                
+                prompt = f"""You are an expert documentation assistant. Answer based on this context:\n\n{context}\n\nQuestion: {request.query}\n\nAnswer:"""
                 response = gemini_service.model.generate_content(
                     prompt,
-                    generation_config={
-                        "temperature": 0.3,
-                        "top_p": 0.8,
-                        "top_k": 40,
-                        "max_output_tokens": 2048,
-                    }
+                    generation_config={"temperature": 0.3, "max_output_tokens": 2048}
                 )
-                
                 llm_raw_response = response.text if hasattr(response, 'text') else str(response)
                 final_answer = llm_raw_response
-                
-                print(f"✅ LLM Response received ({len(llm_raw_response)} characters)")
-                print("\n📄 LLM Response:")
-                print("-" * 60)
-                print(llm_raw_response[:1000] + "..." if len(llm_raw_response) > 1000 else llm_raw_response)
-                print("-" * 60)
-                print()
-                
+                print(f"✅ LLM Response received ({len(final_answer)} characters)")
             except Exception as e:
                 print(f"❌ LLM Error: {e}")
                 final_answer = f"LLM Error: {str(e)}"

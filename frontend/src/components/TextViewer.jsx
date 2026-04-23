@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { FileText, Code, Loader, AlertCircle, Copy, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -37,7 +37,7 @@ function getBadge(filename) {
   return map[ext] || { label: ext.replace('.', '').toUpperCase() || 'FILE', cls: 'bg-slate-500/20 text-slate-300' };
 }
 
-export default function TextViewer({ fileUrl, filename, fileContent, darkMode }) {
+export default function TextViewer({ fileUrl, filename, fileContent }) {
   const [content, setContent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -139,7 +139,7 @@ export default function TextViewer({ fileUrl, filename, fileContent, darkMode })
             <div className="prose-dark px-1">
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
                 components={{
-                  code({ node, inline, className, children, ...props }) {
+                  code({ inline, className, children, ...props }) {
                     if (inline) {
                       return (
                         <code style={{ background: 'var(--bg-surface-2)', color: '#e879f9', border: '1px solid var(--border)', borderRadius: '3px', padding: '0.1em 0.35em', fontSize: '0.85em' }} {...props}>

@@ -9,6 +9,25 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _safe_text(response) -> str:
+    """Extract text from a Gemini response without raising on empty/filtered parts."""
+    try:
+        # Fast path — works when response has valid parts
+        return response.text
+    except Exception:
+        pass
+    try:
+        # Walk candidates → content → parts manually
+        for candidate in (response.candidates or []):
+            parts = getattr(getattr(candidate, "content", None), "parts", None) or []
+            texts = [p.text for p in parts if getattr(p, "text", None)]
+            if texts:
+                return "\n".join(texts)
+    except Exception:
+        pass
+    return ""
+
+
 class GeminiService:
     """Service for Gemini AI integration with retry logic and streaming support."""
 
@@ -59,14 +78,19 @@ ANSWER:"""
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def generate_answer(self, query: str, context: str) -> Optional[str]:
-        """Generate answer using Gemini AI with automatic retry on failure."""
-        if not self.enabled or not self.model:
-            return None
+    def generate_answer(self, query: str, context: str) -> tuple[Optional[str], int, int]:
+        """Generate answer using Gemini AI.
 
+        Returns (answer_text, tokens_in, tokens_out).
+        Token counts come from usage_metadata when available; otherwise estimated.
+        """
+        if not self.enabled or not self.model:
+            return None, 0, 0
+
+        prompt = self._build_prompt(query, context)
         try:
             response = self.model.generate_content(
-                self._build_prompt(query, context),
+                prompt,
                 generation_config={
                     "temperature": 0.3,
                     "top_p": 0.8,
@@ -74,7 +98,15 @@ ANSWER:"""
                     "max_output_tokens": 2048,
                 }
             )
-            return response.text
+            text = _safe_text(response)
+            try:
+                meta = response.usage_metadata
+                tokens_in  = meta.prompt_token_count or 0
+                tokens_out = meta.candidates_token_count or 0
+            except Exception:
+                tokens_in  = len(prompt) // 4
+                tokens_out = len(text)   // 4
+            return text, tokens_in, tokens_out
         except Exception as e:
             logger.error("Gemini API error: %s", e)
             raise
@@ -100,7 +132,7 @@ ANSWER:"""
 
             def _collect_chunks() -> list:
                 resp = self.model.generate_content(prompt, generation_config=config, stream=True)
-                return [chunk.text for chunk in resp if chunk.text]
+                return [t for chunk in resp for t in [_safe_text(chunk)] if t]
 
             chunks = await asyncio.to_thread(_collect_chunks)
             for chunk in chunks:

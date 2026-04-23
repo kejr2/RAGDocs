@@ -1,0 +1,163 @@
+[
+  {
+    "id": "Q01",
+    "question": "How do I authenticate with the API?",
+    "expected_keywords": ["bearer", "api key", "token", "authorization", "header", "authenticate"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "authentication"
+  },
+  {
+    "id": "Q02",
+    "question": "What HTTP methods are supported by the API endpoints?",
+    "expected_keywords": ["get", "post", "put", "delete", "patch", "http"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "endpoints"
+  },
+  {
+    "id": "Q03",
+    "question": "What are the rate limits for API requests?",
+    "expected_keywords": ["rate", "limit", "requests", "per", "second", "minute", "hour", "throttle"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "rate_limits"
+  },
+  {
+    "id": "Q04",
+    "question": "How do I paginate through large result sets?",
+    "expected_keywords": ["page", "pagination", "cursor", "offset", "limit", "next", "results"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "pagination"
+  },
+  {
+    "id": "Q05",
+    "question": "What error codes does the API return?",
+    "expected_keywords": ["error", "code", "status", "400", "401", "403", "404", "500"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "errors"
+  },
+  {
+    "id": "Q06",
+    "question": "How do I set up webhooks to receive event notifications?",
+    "expected_keywords": ["webhook", "event", "notification", "callback", "endpoint", "payload"],
+    "expected_sources_min": 1,
+    "min_confidence": "LOW",
+    "category": "webhooks"
+  },
+  {
+    "id": "Q07",
+    "question": "What SDKs or client libraries are available?",
+    "expected_keywords": ["sdk", "library", "client", "python", "javascript", "java", "language"],
+    "expected_sources_min": 1,
+    "min_confidence": "LOW",
+    "category": "sdks"
+  },
+  {
+    "id": "Q08",
+    "question": "How do I make my first API request?",
+    "expected_keywords": ["request", "curl", "example", "api", "call", "endpoint"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "quickstart"
+  },
+  {
+    "id": "Q09",
+    "question": "What is the base URL for the API?",
+    "expected_keywords": ["url", "base", "https", "endpoint", "host", "domain"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "endpoints"
+  },
+  {
+    "id": "Q10",
+    "question": "How do I handle API authentication tokens that expire?",
+    "expected_keywords": ["token", "expire", "refresh", "renewal", "expir", "ttl", "invalid"],
+    "expected_sources_min": 1,
+    "min_confidence": "LOW",
+    "category": "authentication"
+  },
+  {
+    "id": "Q11",
+    "question": "What response format does the API use?",
+    "expected_keywords": ["json", "response", "format", "content-type", "body", "object"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "response_format"
+  },
+  {
+    "id": "Q12",
+    "question": "How do I filter or search results using query parameters?",
+    "expected_keywords": ["filter", "query", "parameter", "search", "field", "where"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "filtering"
+  },
+  {
+    "id": "Q13",
+    "question": "What happens when I exceed the rate limit?",
+    "expected_keywords": ["rate", "limit", "429", "exceeded", "retry", "backoff", "throttle"],
+    "expected_sources_min": 1,
+    "min_confidence": "LOW",
+    "category": "rate_limits"
+  },
+  {
+    "id": "Q14",
+    "question": "How do I upload or attach files to an API request?",
+    "expected_keywords": ["file", "upload", "multipart", "form", "binary", "attachment"],
+    "expected_sources_min": 1,
+    "min_confidence": "LOW",
+    "category": "file_upload"
+  },
+  {
+    "id": "Q15",
+    "question": "What versioning scheme does the API use?",
+    "expected_keywords": ["version", "v1", "v2", "versioning", "api", "backward", "deprecat"],
+    "expected_sources_min": 1,
+    "min_confidence": "LOW",
+    "category": "versioning"
+  },
+  {
+    "id": "Q16",
+    "question": "How do I create a new resource using the API?",
+    "expected_keywords": ["create", "post", "new", "resource", "body", "request", "payload"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "crud"
+  },
+  {
+    "id": "Q17",
+    "question": "How do I delete a resource?",
+    "expected_keywords": ["delete", "remove", "resource", "endpoint", "id"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "crud"
+  },
+  {
+    "id": "Q18",
+    "question": "Are there any required headers I must include in every request?",
+    "expected_keywords": ["header", "required", "content-type", "authorization", "accept"],
+    "expected_sources_min": 1,
+    "min_confidence": "MEDIUM",
+    "category": "headers"
+  },
+  {
+    "id": "Q19",
+    "question": "How do I test the API in a sandbox or development environment?",
+    "expected_keywords": ["test", "sandbox", "development", "staging", "environment", "mock"],
+    "expected_sources_min": 1,
+    "min_confidence": "LOW",
+    "category": "testing"
+  },
+  {
+    "id": "Q20",
+    "question": "What is the meaning of life according to this documentation?",
+    "expected_keywords": ["42", "philosophy", "life", "meaning"],
+    "expected_sources_min": 0,
+    "min_confidence": "LOW",
+    "category": "out_of_scope",
+    "expect_fallback": true
+  }
+]

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, Text
+from sqlalchemy import Column, String, Integer, DateTime, Text, Boolean
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -30,5 +30,10 @@ class Chunk(Base):
     chunk_type = Column(String, nullable=False)  # "text" or "code"
     heading = Column(String, nullable=True)
     language = Column(String, nullable=True)
+    # enriched metadata (Fix 3)
+    page_number = Column(Integer, nullable=True, default=0)
+    section_heading = Column(Text, nullable=True, default="")
+    has_table = Column(Boolean, nullable=True, default=False)
+    has_list = Column(Boolean, nullable=True, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

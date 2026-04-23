@@ -15,12 +15,12 @@ from app.services.gemini import gemini_service
 
 class QueryEnhancer:
     """Enhances queries using LLM before vector search"""
-    
+
     def __init__(self):
         self.gemini_service = gemini_service
-    
+
     def enhance_query(
-        self, 
+        self,
         original_query: str,
         context: Optional[str] = None
     ) -> Dict[str, any]:
@@ -47,17 +47,17 @@ class QueryEnhancer:
                 "query_type": self._detect_query_type_simple(original_query),
                 "search_strategy": "broad"
             }
-        
+
         try:
             # Build prompt for query enhancement
             prompt = self._build_enhancement_prompt(original_query, context)
-            
+
             # Call Gemini to enhance query
             if not self.gemini_service.model:
                 raise Exception("Gemini model not available")
-            
+
             response = self.gemini_service.model.generate_content(prompt)
-            
+
             # Extract text from response
             if hasattr(response, 'text'):
                 response_text = response.text

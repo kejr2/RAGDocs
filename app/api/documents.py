@@ -1,4 +1,5 @@
 import logging
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -15,6 +16,32 @@ router = APIRouter()
 class DeleteResponse(BaseModel):
     status: str
     doc_id: str
+
+
+class DocumentItem(BaseModel):
+    doc_id: str
+    filename: str
+    total_chunks: int
+    text_chunks: int
+    code_chunks: int
+    uploadedAt: Optional[str] = None
+
+
+@router.get("/documents", status_code=status.HTTP_200_OK)
+async def list_documents(db: Session = Depends(get_db)) -> List[DocumentItem]:
+    """List every document indexed in PostgreSQL (newest first)."""
+    rows = db.query(Document).order_by(Document.created_at.desc()).all()
+    return [
+        DocumentItem(
+            doc_id=d.id,
+            filename=d.filename,
+            total_chunks=d.total_chunks or 0,
+            text_chunks=d.text_chunks or 0,
+            code_chunks=d.code_chunks or 0,
+            uploadedAt=d.created_at.isoformat() if d.created_at else None,
+        )
+        for d in rows
+    ]
 
 
 @router.delete("/documents/{doc_id}", status_code=status.HTTP_200_OK)

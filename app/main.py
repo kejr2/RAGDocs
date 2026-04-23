@@ -6,11 +6,12 @@ from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api import health, docs, chat, chunks, documents, debug, test_vectordb
+from app.api import health, docs, chat, chunks, documents, debug, test_vectordb, metrics
 from app.api.chat import limiter
 from app.core.config import settings
 from app.core.database import init_db, Base, engine
 from app.core.qdrant_client import init_qdrant
+from app.services.metrics import init_metrics_db
 
 # Configure structured logging
 logging.basicConfig(
@@ -65,6 +66,34 @@ app.include_router(chunks.router, prefix="/docs", tags=["docs"])
 app.include_router(documents.router, prefix="/docs", tags=["docs"])
 app.include_router(debug.router, prefix="/debug", tags=["debug"])
 app.include_router(test_vectordb.router, prefix="/test/vectordb", tags=["test"])
+app.include_router(metrics.router, tags=["metrics"])
+
+
+def _migrate_chunks_schema():
+    """
+    Idempotently add the enriched-metadata columns (Fix 3) to an existing
+    *chunks* table.  PostgreSQL 9.6+ supports ADD COLUMN IF NOT EXISTS so this
+    is safe to run on every startup.
+    """
+    from sqlalchemy import text
+    migrations = [
+        "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS page_number INTEGER DEFAULT 0",
+        "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS section_heading TEXT DEFAULT ''",
+        "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS has_table BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS has_list BOOLEAN DEFAULT FALSE",
+    ]
+    try:
+        with engine.connect() as conn:
+            for sql in migrations:
+                try:
+                    conn.execute(text(sql))
+                    conn.commit()
+                except Exception as col_err:
+                    conn.rollback()
+                    logger.debug("Schema migration skipped: %s", col_err)
+        logger.info("chunks schema migration complete")
+    except Exception as e:
+        logger.warning("Could not run chunks schema migration: %s", e)
 
 
 @app.on_event("startup")
@@ -74,6 +103,8 @@ async def startup_event():
     Base.metadata.create_all(bind=engine)
     await init_db()
     await init_qdrant()
+    init_metrics_db()
+    _migrate_chunks_schema()
     logger.info("RAGDocs API ready")
 
 
