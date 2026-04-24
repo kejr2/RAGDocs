@@ -1,8 +1,10 @@
 """
 Markdown-aware document chunking with enriched metadata.
 
-Uses MarkdownTextSplitter (chunk_size=600, chunk_overlap=150) so that section
+Uses MarkdownTextSplitter (chunk_size=600, chunk_overlap=200) so that section
 boundaries are respected and table / list structures are not split mid-row.
+Callouts (Note / Warning / Important) are tagged inline before splitting so
+the [WARNING] / [IMPORTANT NOTE] marker survives chunking (Issue 3).
 Extra metadata carried per chunk: page_number, section_heading, has_table,
 has_list — used later for BM25 hybrid retrieval and section-filtered fallback.
 """
@@ -89,6 +91,82 @@ def _has_list(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Callout detection (Issue 3)
+# ---------------------------------------------------------------------------
+# Detect callout / admonition blocks in the source document and prefix their
+# content with [IMPORTANT NOTE] or [WARNING] so the marker survives chunking
+# and embedding. The prefix is inlined into the source BEFORE splitting so the
+# callout text stays attached to its parent section in whichever chunk it
+# falls into. Increased overlap (200 tokens) further reduces the chance of a
+# callout straddling a boundary and getting orphaned.
+
+_WARNING_KEYWORDS = ("warning", "danger", "caution", "critical")
+_NOTE_KEYWORDS    = ("note", "important", "tip", "info")
+
+_CALLOUT_LINE_RE = re.compile(
+    r"""(?ix)
+    ^(?P<indent>\s*)
+    (?:>\s*)?                       # optional blockquote marker
+    (?:[\u26A0\u2757\U0001F4CC\u2139\u2705]\uFE0F?\s*)?  # optional emoji
+    (?:\*{1,2})?                    # optional bold start
+    (?P<word>warning|danger|caution|critical|note|important|tip|info)
+    (?:\*{1,2})?                    # optional bold end
+    \s*[:\-—]                       # required punctuation
+    (?P<rest>.*)$
+    """
+)
+
+
+def _tag_callouts(content: str) -> str:
+    """
+    Walk *content* line by line. When a line opens a callout (e.g.
+    "> **Warning:** ..."), prefix that line and all immediately-following
+    indented / blockquote-continuation lines with [WARNING] or
+    [IMPORTANT NOTE]. Idempotent — already-tagged callouts are skipped.
+    """
+    out_lines: List[str] = []
+    lines = content.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = _CALLOUT_LINE_RE.match(line)
+        if not m or "[WARNING]" in line or "[IMPORTANT NOTE]" in line:
+            out_lines.append(line)
+            i += 1
+            continue
+
+        word = m.group("word").lower()
+        tag  = "[WARNING]" if word in _WARNING_KEYWORDS else "[IMPORTANT NOTE]"
+        indent = m.group("indent") or ""
+
+        # Insert the tag at the start of the line (after indent) and inline
+        # the rest of the callout block — subsequent blockquote / indented
+        # continuation lines belong to the same callout.
+        first = f"{indent}{tag} {line[len(indent):].lstrip()}"
+        out_lines.append(first)
+        i += 1
+        while i < len(lines):
+            nxt = lines[i]
+            stripped = nxt.lstrip()
+            # Continuation: blockquote line, or indented under the callout,
+            # or a non-blank line right after with no new heading / fence.
+            is_blockquote_cont = stripped.startswith(">")
+            is_indent_cont = nxt.startswith(indent + " ") and stripped != ""
+            is_blank = not stripped
+            if is_blockquote_cont or is_indent_cont:
+                out_lines.append(nxt)
+                i += 1
+                continue
+            if is_blank:
+                out_lines.append(nxt)
+                i += 1
+                # Stop after one blank line so we don't swallow the next paragraph
+                break
+            break
+    return "\n".join(out_lines)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -115,17 +193,21 @@ def chunk_document(
     # Build splitter — prefer MarkdownTextSplitter, fall back gracefully
     try:
         from langchain_text_splitters import MarkdownTextSplitter
-        splitter = MarkdownTextSplitter(chunk_size=600, chunk_overlap=150)
+        splitter = MarkdownTextSplitter(chunk_size=600, chunk_overlap=200)
     except ImportError:
         try:
             from langchain.text_splitter import MarkdownTextSplitter
-            splitter = MarkdownTextSplitter(chunk_size=600, chunk_overlap=150)
+            splitter = MarkdownTextSplitter(chunk_size=600, chunk_overlap=200)
         except ImportError:
             from langchain.text_splitter import RecursiveCharacterTextSplitter
             splitter = RecursiveCharacterTextSplitter(
-                chunk_size=600, chunk_overlap=150,
+                chunk_size=600, chunk_overlap=200,
                 separators=["\n\n", "\n", ". ", " ", ""]
             )
+
+    # Issue 3: tag callouts ([WARNING] / [IMPORTANT NOTE]) inline so they
+    # survive splitting and stay attached to their parent section.
+    content = _tag_callouts(content)
 
     headings = _extract_headings(content)
     raw_chunks = splitter.split_text(content)
@@ -139,7 +221,7 @@ def chunk_document(
 
         # Locate chunk inside the original text (account for overlap window)
         fragment = chunk_text[:80] if len(chunk_text) >= 80 else chunk_text
-        start_hint = max(0, search_pos - 150)
+        start_hint = max(0, search_pos - 200)
         pos = content.find(fragment, start_hint)
         if pos == -1:
             # Fallback: search without offset
@@ -179,7 +261,7 @@ def chunk_document(
         ))
 
         # Advance search cursor, keeping overlap window
-        search_pos = pos + max(len(chunk_text) - 150, 1)
+        search_pos = pos + max(len(chunk_text) - 200, 1)
 
     # Sort by position in original document
     chunks.sort(key=lambda c: c.start)

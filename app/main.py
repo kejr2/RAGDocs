@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.database import init_db, Base, engine
 from app.core.qdrant_client import init_qdrant
 from app.services.metrics import init_metrics_db
+from app.services.conversations import init_conversations_db
 
 # Configure structured logging
 logging.basicConfig(
@@ -104,6 +105,7 @@ async def startup_event():
     await init_db()
     await init_qdrant()
     init_metrics_db()
+    init_conversations_db()
     _migrate_chunks_schema()
     logger.info("RAGDocs API ready")
 

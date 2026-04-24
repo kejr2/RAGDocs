@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send, X, Code, FileText, Copy, Check, RotateCcw,
   Trash2, Clock, Zap, MessageSquare, ChevronDown, ChevronRight, Cpu,
-  ThumbsUp, ThumbsDown, Shield
+  ThumbsUp, ThumbsDown, Shield, Plus, CornerDownRight
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -12,6 +12,7 @@ import toast from 'react-hot-toast';
 import { API_BASE } from '../config';
 
 const HISTORY_KEY = 'ragdocs_query_history';
+const CONV_ID_KEY = 'ragdocs_conversation_id';
 const MAX_HISTORY = 10;
 
 const SUGGESTIONS = [
@@ -173,13 +174,40 @@ function MarkdownMessage({ content }) {
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
-          code({ inline, className, children, ...props }) {
-            if (inline) return (
-              <code {...props}>{children}</code>
-            );
+          // react-markdown v9 removed the `inline` prop. Detect blocks by:
+          //   1. presence of `language-xxx` className (fenced block), OR
+          //   2. a newline in the raw text content.
+          // Everything else is inline code.
+          code({ className, children, ...props }) {
+            const raw = extractText(children);
+            const isFenced = /language-\w+/.test(className || '');
+            const isBlock = isFenced || raw.includes('\n');
+
+            if (!isBlock) {
+              return (
+                <code
+                  style={{
+                    background:   'rgba(198,241,53,0.12)',
+                    color:        '#c6f135',
+                    padding:      '1px 6px',
+                    borderRadius: '3px',
+                    fontFamily:   "'DM Mono', 'JetBrains Mono', monospace",
+                    fontSize:     '0.88em',
+                    fontWeight:   500,
+                    whiteSpace:   'nowrap',
+                  }}
+                  {...props}
+                >
+                  {children}
+                </code>
+              );
+            }
             return <CodeBlock className={className}>{children}</CodeBlock>;
           },
           pre({ children }) { return <>{children}</>; },
+          p({ children }) {
+            return <p style={{ margin: '0 0 10px 0', lineHeight: 1.6 }}>{children}</p>;
+          },
         }}
       >
         {content}
@@ -202,6 +230,10 @@ export default function QuerySidebar({ currentDoc, onClose, onJumpToPdf }) {
   const [copiedMsg,     setCopiedMsg]     = useState(null);
   const [models,        setModels]        = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
+  // Conversation memory — id persists in localStorage so reloads keep the thread.
+  const [conversationId, setConversationId] = useState(() => {
+    try { return localStorage.getItem(CONV_ID_KEY) || null; } catch { return null; }
+  });
   const messagesEndRef = useRef(null);
   const textareaRef    = useRef(null);
   const abortRef       = useRef(null);
@@ -213,6 +245,33 @@ export default function QuerySidebar({ currentDoc, onClose, onJumpToPdf }) {
   useEffect(() => {
     try { sessionStorage.setItem('ragdocs_messages', JSON.stringify(messages)); } catch (_e) { /* ignore */ }
   }, [messages]);
+
+  // Persist conversationId whenever it changes.
+  useEffect(() => {
+    try {
+      if (conversationId) localStorage.setItem(CONV_ID_KEY, conversationId);
+      else localStorage.removeItem(CONV_ID_KEY);
+    } catch (_e) { /* ignore */ }
+  }, [conversationId]);
+
+  /* ─── New thread ─────────────────────────────────────────────────────── */
+  const startNewConversation = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/chat/new_conversation`, { method: 'POST' });
+      if (res.ok) {
+        const j = await res.json();
+        setConversationId(j.conversation_id);
+      } else {
+        // Fall back to letting the next /stream call mint one server-side.
+        setConversationId(null);
+      }
+    } catch {
+      setConversationId(null);
+    }
+    setMessages([]);
+    try { sessionStorage.removeItem('ragdocs_messages'); } catch (_e) { /* ignore */ }
+    toast.success('Started new thread');
+  }, []);
 
   useEffect(() => {
     fetch(`${API_BASE}/chat/models`)
@@ -265,6 +324,7 @@ export default function QuerySidebar({ currentDoc, onClose, onJumpToPdf }) {
           doc_id: currentDoc?.doc_id || null,
           top_k: 8,
           model: selectedModel || null,
+          conversation_id: conversationId || null,
         }),
         signal: controller.signal,
       });
@@ -301,6 +361,10 @@ export default function QuerySidebar({ currentDoc, onClose, onJumpToPdf }) {
                 return next;
               });
             } else if (data.done) {
+              // Server may mint a fresh conversation_id if we didn't have one.
+              if (data.conversation_id && data.conversation_id !== conversationId) {
+                setConversationId(data.conversation_id);
+              }
               setMessages(prev => {
                 const next = [...prev];
                 const last = next[next.length - 1];
@@ -313,6 +377,8 @@ export default function QuerySidebar({ currentDoc, onClose, onJumpToPdf }) {
                     fallback_triggered: data.fallback_triggered || false,
                     query_id: data.query_id || null,
                     feedback: null,
+                    used_context: !!data.used_context,
+                    prior_turn_count: data.prior_turn_count || 0,
                   };
                 }
                 return next;
@@ -355,10 +421,13 @@ export default function QuerySidebar({ currentDoc, onClose, onJumpToPdf }) {
         const res  = await fetch(`${API_BASE}/chat/query`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: q, doc_id: currentDoc?.doc_id || null, top_k: 8, model: selectedModel || null }),
+          body: JSON.stringify({ query: q, doc_id: currentDoc?.doc_id || null, top_k: 8, model: selectedModel || null, conversation_id: conversationId || null }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || 'Query failed');
+        if (data.conversation_id && data.conversation_id !== conversationId) {
+          setConversationId(data.conversation_id);
+        }
         setMessages(prev => {
           const next = [...prev];
           next[next.length - 1] = {
@@ -366,6 +435,8 @@ export default function QuerySidebar({ currentDoc, onClose, onJumpToPdf }) {
             streaming: false, sources: data.sources || [],
             confidence: data.confidence || null,
             fallback_triggered: data.fallback_triggered || false,
+            used_context: !!data.used_context,
+            prior_turn_count: 0,  // /query response shape doesn't include this
           };
           return next;
         });
@@ -383,7 +454,7 @@ export default function QuerySidebar({ currentDoc, onClose, onJumpToPdf }) {
       clearTimeout(timeoutId);
       setStreaming(false);
     }
-  }, [query, streaming, currentDoc, addToHistory, selectedModel]);
+  }, [query, streaming, currentDoc, addToHistory, selectedModel, conversationId]);
 
   const handleKeyDown = e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuery(); }
@@ -465,9 +536,29 @@ export default function QuerySidebar({ currentDoc, onClose, onJumpToPdf }) {
           )}
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={startNewConversation}
+            disabled={streaming}
+            title="Start a fresh conversation thread"
+            className="flex items-center gap-1 px-2 py-1 rounded-lg font-mono-ui transition-all"
+            style={{
+              fontSize: '10px',
+              letterSpacing: '1.5px',
+              color: 'var(--text-muted)',
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              opacity: streaming ? 0.4 : 1,
+              cursor: streaming ? 'not-allowed' : 'pointer',
+            }}
+            onMouseEnter={e => { if (!streaming) { e.currentTarget.style.color = 'var(--volt)'; e.currentTarget.style.borderColor = 'var(--volt-border)'; } }}
+            onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'var(--border)'; }}
+          >
+            <Plus className="w-3 h-3" />
+            NEW THREAD
+          </button>
           {hasMessages && (
             <button onClick={() => setMessages([])}
-              className="p-1.5 rounded-lg" title="Clear conversation"
+              className="p-1.5 rounded-lg" title="Clear visible messages (keeps thread id)"
               style={{ color: 'var(--text-muted)', background: 'var(--bg-card)' }}>
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -584,6 +675,23 @@ export default function QuerySidebar({ currentDoc, onClose, onJumpToPdf }) {
 
                 /* ── Assistant bubble ── */
                 <div className="group">
+                  {/* Context-awareness badge — visible proof memory was used */}
+                  {!msg.streaming && msg.used_context && (
+                    <div className="mb-1 flex items-center gap-1"
+                         style={{
+                           fontFamily: "'DM Mono', monospace",
+                           fontSize: '9px',
+                           color: '#888',
+                           fontStyle: 'italic',
+                           letterSpacing: '0.3px',
+                         }}>
+                      <CornerDownRight className="w-2.5 h-2.5" />
+                      Using context from {msg.prior_turn_count || 'previous'}
+                      {msg.prior_turn_count
+                        ? ` previous message${msg.prior_turn_count === 1 ? '' : 's'}`
+                        : ' messages'}
+                    </div>
+                  )}
                   {/* Confidence badge — own row, ABOVE the answer */}
                   {!msg.streaming && msg.confidence && (
                     <div className="mb-2">

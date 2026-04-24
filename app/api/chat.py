@@ -22,6 +22,14 @@ from app.services.answer_formatter import format_basic_answer
 from app.services.retrieval import QueryCache
 from app.services.metrics import log_query, record_feedback
 from app.services.guards import validate_query
+from app.services.conversations import (
+    create_conversation,
+    add_turn,
+    get_recent_turns,
+    get_full_conversation,
+    soft_delete_conversation,
+    ENHANCER_TURN_WINDOW,
+)
 
 # BM25 hybrid retrieval (Fix 4) — graceful import
 try:
@@ -111,6 +119,200 @@ def _bm25_hybrid_rerank(
 
 
 # ---------------------------------------------------------------------------
+# Document diversity helper (Issue 1, Fix A)
+# ---------------------------------------------------------------------------
+
+def _diversify_by_document(
+    reranked_pairs: List[tuple],
+    target_k: int = 8,
+    max_per_doc: int = 3,
+    min_docs: int = 2,
+    min_score_for_min_docs: float = 0.5,
+) -> List[tuple]:
+    """
+    Re-order BM25-hybrid output to prevent any single document from dominating
+    the top-k. Keeps reranked_pairs' (combined_score, result) shape.
+
+    Strategy:
+      1. Group by doc_id, preserving descending-score order within each group.
+      2. Round-robin across docs, taking up to max_per_doc per doc.
+      3. If the chosen top-k contains fewer than min_docs distinct documents
+         AND at least min_docs docs have a chunk scoring >= min_score_for_min_docs,
+         swap in the best chunk from each missing doc (displacing the lowest-
+         scored over-represented chunk).
+
+    If reranked_pairs has only one source document, returns the input slice
+    unchanged (nothing to diversify).
+    """
+    if not reranked_pairs:
+        return []
+
+    # Group, preserving original sort
+    by_doc: Dict[str, List[tuple]] = {}
+    for pair in reranked_pairs:
+        _, r = pair
+        doc_id = (r.payload or {}).get("doc_id") or "__unknown__"
+        by_doc.setdefault(doc_id, []).append(pair)
+
+    if len(by_doc) <= 1:
+        return reranked_pairs[:target_k]
+
+    # Round-robin pick
+    queues = {d: list(pairs) for d, pairs in by_doc.items()}
+    taken_per_doc: Dict[str, int] = {d: 0 for d in queues}
+    selected: List[tuple] = []
+
+    # Order docs by their best score so the highest-quality doc gets first pick
+    doc_order = sorted(queues.keys(), key=lambda d: queues[d][0][0], reverse=True)
+
+    while len(selected) < target_k:
+        progress = False
+        for d in doc_order:
+            if len(selected) >= target_k:
+                break
+            if taken_per_doc[d] >= max_per_doc:
+                continue
+            if not queues[d]:
+                continue
+            selected.append(queues[d].pop(0))
+            taken_per_doc[d] += 1
+            progress = True
+        if not progress:
+            # All docs are at max_per_doc or empty — backfill with leftovers,
+            # ignoring max_per_doc so we still hit target_k.
+            leftovers = [p for d in doc_order for p in queues[d]]
+            leftovers.sort(key=lambda x: x[0], reverse=True)
+            for p in leftovers:
+                if len(selected) >= target_k:
+                    break
+                selected.append(p)
+            break
+
+    # Min-docs guarantee
+    distinct_in_selected = {(_r.payload or {}).get("doc_id") for _, _r in selected}
+    qualified_docs = {
+        d for d, pairs in by_doc.items()
+        if pairs and pairs[0][0] >= min_score_for_min_docs
+    }
+    if len(distinct_in_selected) < min_docs and len(qualified_docs) >= min_docs:
+        missing = [d for d in qualified_docs if d not in distinct_in_selected]
+        # Sort missing docs by their top score
+        missing.sort(key=lambda d: by_doc[d][0][0], reverse=True)
+        for d in missing:
+            if not by_doc[d]:
+                continue
+            # Drop the lowest-scored selected chunk from the most over-represented doc
+            over_doc = max(
+                distinct_in_selected,
+                key=lambda x: sum(1 for _, _r in selected if (_r.payload or {}).get("doc_id") == x),
+            )
+            # Find the lowest-scored entry from over_doc
+            victim_idx = None
+            for i in range(len(selected) - 1, -1, -1):
+                if (selected[i][1].payload or {}).get("doc_id") == over_doc:
+                    victim_idx = i
+                    break
+            if victim_idx is None:
+                continue
+            selected[victim_idx] = by_doc[d][0]
+            distinct_in_selected = {(_r.payload or {}).get("doc_id") for _, _r in selected}
+            if len(distinct_in_selected) >= min_docs:
+                break
+
+    # Final sort by combined_score so the top of the list is still the best chunk
+    selected.sort(key=lambda x: x[0], reverse=True)
+    return selected
+
+
+# ---------------------------------------------------------------------------
+# Intent-based doc affinity (Issue 2, Fix B)
+# ---------------------------------------------------------------------------
+
+# For each intent, list filename substrings (case-insensitive) we want to
+# guarantee at least min_each chunks from when they exist in the candidate pool.
+INTENT_DOC_AFFINITY: Dict[str, List[str]] = {
+    "getting_started":  ["auth", "api_reference", "api reference"],
+    "authentication":   ["auth"],
+    "webhooks":         ["webhook"],
+    "api_usage":        ["api_reference", "api reference"],
+    "error_handling":   ["api_reference", "webhook"],
+    "security":         ["auth", "security"],
+    "general":          [],
+}
+
+
+def _apply_intent_affinity(
+    reranked_pairs: List[tuple],
+    intent: str,
+    min_each: int = 2,
+    target_k: int = 8,
+) -> List[tuple]:
+    """
+    Make sure each intent-affine document has at least *min_each* chunks in
+    the top-k slice, when chunks from that doc exist in the candidate pool.
+    Operates on the full reranked_pairs (not just the top-k) so we have headroom
+    to promote.
+    """
+    affine_substrs = [s.lower() for s in INTENT_DOC_AFFINITY.get(intent, [])]
+    if not affine_substrs or not reranked_pairs:
+        return reranked_pairs
+
+    def matches_any(filename: str) -> Optional[str]:
+        fl = (filename or "").lower()
+        for s in affine_substrs:
+            if s in fl:
+                return s
+        return None
+
+    # Bucket pairs by which affinity key they match (first match wins).
+    by_key: Dict[str, List[tuple]] = {s: [] for s in affine_substrs}
+    other: List[tuple] = []
+    for pair in reranked_pairs:
+        _, r = pair
+        key = matches_any((r.payload or {}).get("source_file", ""))
+        if key is not None:
+            by_key[key].append(pair)
+        else:
+            other.append(pair)
+
+    head = list(reranked_pairs[:target_k])
+    head_ids = {(_r.payload or {}).get("chunk_id", _r.id) for _, _r in head}
+
+    for key, pool in by_key.items():
+        if not pool:
+            continue
+        present = sum(
+            1 for _, _r in head
+            if matches_any((_r.payload or {}).get("source_file", "")) == key
+        )
+        needed = min_each - present
+        if needed <= 0:
+            continue
+        # Pull the next-best chunks from this doc that aren't already in head.
+        candidates = [p for p in pool if (p[1].payload or {}).get("chunk_id", p[1].id) not in head_ids]
+        for cand in candidates[:needed]:
+            # Displace the lowest-scored item in head that isn't already
+            # satisfying another affinity key.
+            displaceable = [
+                (i, pair) for i, pair in enumerate(head)
+                if matches_any((pair[1].payload or {}).get("source_file", "")) is None
+            ]
+            if not displaceable:
+                # Everything in head is affine — displace lowest of the most
+                # over-represented key.
+                displaceable = list(enumerate(head))
+            victim_idx, _ = min(displaceable, key=lambda x: x[1][0])
+            head[victim_idx] = cand
+            head_ids = {(_r.payload or {}).get("chunk_id", _r.id) for _, _r in head}
+
+    head.sort(key=lambda x: x[0], reverse=True)
+    # Append the rest (untouched tail) so callers that read further still work.
+    head_ids = {(_r.payload or {}).get("chunk_id", _r.id) for _, _r in head}
+    tail = [p for p in reranked_pairs if (p[1].payload or {}).get("chunk_id", p[1].id) not in head_ids]
+    return head + tail
+
+
+# ---------------------------------------------------------------------------
 # Section-filtered fallback helper (Fix 5)
 # ---------------------------------------------------------------------------
 
@@ -156,6 +358,7 @@ class QueryRequest(BaseModel):
     query: str
     doc_id: Optional[str] = None
     top_k: int = 10
+    conversation_id: Optional[str] = None  # if absent, server creates a new one
 
 
 class QueryResponse(BaseModel):
@@ -165,11 +368,25 @@ class QueryResponse(BaseModel):
     confidence: str = "LOW"
     fallback_triggered: bool = False
     query_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    used_context: bool = False  # true iff prior turns influenced the rewrite
 
 
 class FeedbackRequest(BaseModel):
     query_id: str
     feedback: int  # 1 = thumbs up, -1 = thumbs down
+
+
+def _resolve_conversation(conversation_id: Optional[str]) -> tuple[str, list, bool]:
+    """
+    Resolve / create the conversation_id and return:
+      (conversation_id, prior_turns, has_prior)
+    prior_turns is the rolling window the enhancer will see.
+    """
+    if not conversation_id:
+        return create_conversation(), [], False
+    prior = get_recent_turns(conversation_id, n=ENHANCER_TURN_WINDOW)
+    return conversation_id, prior, len(prior) > 0
 
 
 def detect_query_type(query: str) -> str:
@@ -241,24 +458,41 @@ async def _run_rag_pipeline(request: QueryRequest) -> QueryResponse:
     """Core RAG pipeline shared by both /query and /stream endpoints."""
     total_start = time.time()
 
-    # --- Cache check ---
+    # --- Conversation memory ---
+    conversation_id, prior_turns, used_context = _resolve_conversation(request.conversation_id)
+
+    # Persist the user turn before retrieval — even on fallback we want it logged.
+    add_turn(conversation_id, "user", request.query)
+
+    # --- Cache check (keyed by raw query — context-rewrites are cheap to redo)
     cached = query_cache.get(request.query, request.doc_id)
     if cached:
         logger.info("Cache hit for query: %s", request.query[:60])
-        return cached
+        # Persist assistant turn from the cached answer so memory stays consistent.
+        add_turn(conversation_id, "assistant", cached.answer, sources_used=cached.sources)
+        # Return a shallow copy with conversation_id stamped in.
+        return QueryResponse(
+            **{**cached.dict(), "conversation_id": conversation_id, "used_context": used_context}
+        )
 
-    # Step 1: Query enhancement
+    # Step 1a: Resolve pronouns / "it" using prior turns (if any).
     t0 = time.time()
-    logger.info("Processing query: %s", request.query[:80])
-    enhanced_data = query_enhancer.enhance_query(request.query)
-    logger.info("Query enhancement: %.2fs", time.time() - t0)
+    rewritten_query = query_enhancer.rewrite_with_context(request.query, prior_turns)
+    if rewritten_query != request.query:
+        logger.info("Context rewrite: %r → %r", request.query[:60], rewritten_query[:80])
+
+    # Step 1b: Standard enhancement on the (possibly rewritten) query.
+    logger.info("Processing query: %s", rewritten_query[:80])
+    enhanced_data = query_enhancer.enhance_query(rewritten_query)
+    intent = query_enhancer.classify_intent(rewritten_query)
+    logger.info("Query enhancement: %.2fs (intent=%s)", time.time() - t0, intent)
 
     required_topics = enhanced_data.get("required_topics", [])
     recommended_top_k = enhanced_data.get("recommended_top_k", request.top_k)
     multi_query_needed = enhanced_data.get("multi_query_needed", False)
     effective_top_k = max(request.top_k, recommended_top_k)
 
-    hybrid_search_query = query_enhancer.build_hybrid_search_query(enhanced_data, request.query)
+    hybrid_search_query = query_enhancer.build_hybrid_search_query(enhanced_data, rewritten_query)
     query_type = detect_query_type(hybrid_search_query)
 
     qdrant_client = get_qdrant_client()
@@ -278,7 +512,7 @@ async def _run_rag_pipeline(request: QueryRequest) -> QueryResponse:
         logger.info("Multi-query mode: %d topics", len(required_topics))
 
         async def search_topic(topic: str):
-            topic_query = f"{topic} {request.query}"
+            topic_query = f"{topic} {rewritten_query}"
             text_emb, code_emb = await generate_embeddings_parallel(topic_query)
             per_topic_k = effective_top_k // len(required_topics) + 2
             return await search_collections_parallel(
@@ -319,7 +553,7 @@ async def _run_rag_pipeline(request: QueryRequest) -> QueryResponse:
     query_keywords = enhanced_data.get("keywords", [])
     stop_words = {"what", "is", "are", "the", "for", "with", "from", "this", "that",
                   "how", "to", "do", "does", "should", "can", "will"}
-    query_words = [w.lower() for w in request.query.split() if len(w) > 3 and w.lower() not in stop_words]
+    query_words = [w.lower() for w in rewritten_query.split() if len(w) > 3 and w.lower() not in stop_words]
     all_keywords = list(set([kw.lower() for kw in query_keywords] + query_words))
 
     # Deduplicate by chunk_id (multi-query can yield duplicates)
@@ -334,6 +568,22 @@ async def _run_rag_pipeline(request: QueryRequest) -> QueryResponse:
     # BM25 hybrid re-rank on the expanded candidate pool
     # Returns List[(combined_score, result)] — use combined_score for threshold
     reranked_pairs = _bm25_hybrid_rerank(hybrid_search_query, unique_results)
+
+    # Document diversity (Issue 1, Fix A): prevent any one doc from dominating
+    # the top-k. Only apply when the user hasn't filtered to a single doc.
+    if not request.doc_id:
+        reranked_pairs = _diversify_by_document(
+            reranked_pairs,
+            target_k=max(effective_top_k, 8),
+            max_per_doc=3,
+            min_docs=2,
+        )
+        # Intent-based affinity (Issue 2, Fix B): for getting_started etc.,
+        # guarantee min_each chunks from intent-relevant docs when present.
+        reranked_pairs = _apply_intent_affinity(
+            reranked_pairs, intent,
+            min_each=2, target_k=max(effective_top_k, 8),
+        )
 
     # Keep a flat list of results for the section-filtered fallback
     reranked = [r for _, r in reranked_pairs]
@@ -446,6 +696,7 @@ async def _run_rag_pipeline(request: QueryRequest) -> QueryResponse:
             fallback_triggered=True,
             model_used="gemini",
         )
+        add_turn(conversation_id, "assistant", fallback_msg, sources_used=[])
         return QueryResponse(
             answer=fallback_msg,
             sources=[],
@@ -453,6 +704,8 @@ async def _run_rag_pipeline(request: QueryRequest) -> QueryResponse:
             confidence="LOW",
             fallback_triggered=True,
             query_id=qid,
+            conversation_id=conversation_id,
+            used_context=used_context,
         )
 
     max_ctx = min(10 if (multi_query_needed and len(required_topics) > 1) else 5, len(context_chunks))
@@ -466,7 +719,9 @@ async def _run_rag_pipeline(request: QueryRequest) -> QueryResponse:
     tokens_out_count = 0
     if gemini_service.enabled:
         try:
-            answer, tokens_in_count, tokens_out_count = gemini_service.generate_answer(request.query, context)
+            # Pass the rewritten query so the answer reflects the resolved
+            # intent (e.g. "How do I rotate an API key?" instead of "rotate it?")
+            answer, tokens_in_count, tokens_out_count = gemini_service.generate_answer(rewritten_query, context)
             tokens_used = tokens_in_count + tokens_out_count
         except Exception as e:
             logger.error("Gemini failed after retries: %s", e)
@@ -497,6 +752,8 @@ async def _run_rag_pipeline(request: QueryRequest) -> QueryResponse:
         model_used="gemini",
     )
 
+    add_turn(conversation_id, "assistant", answer, sources_used=sources)
+
     response = QueryResponse(
         answer=answer,
         sources=sources,
@@ -504,6 +761,8 @@ async def _run_rag_pipeline(request: QueryRequest) -> QueryResponse:
         confidence=confidence,
         fallback_triggered=fallback_triggered,
         query_id=qid,
+        conversation_id=conversation_id,
+        used_context=used_context,
     )
 
     query_cache.set(request.query, response, request.doc_id)
@@ -566,6 +825,10 @@ async def stream_chat(
         try:
             total_start = time.time()
 
+            # --- Conversation memory ---
+            conversation_id, prior_turns, used_context = _resolve_conversation(body.conversation_id)
+            add_turn(conversation_id, "user", body.query)
+
             # Cache check
             cached = query_cache.get(body.query, body.doc_id)
             if cached:
@@ -575,17 +838,27 @@ async def stream_chat(
                 for i in range(0, len(answer), chunk_size):
                     yield {"data": json.dumps({"token": answer[i:i+chunk_size]})}
                     await asyncio.sleep(0)
+                add_turn(conversation_id, "assistant", answer, sources_used=cached.sources)
                 yield {"data": json.dumps({
                     "done": True,
                     "sources": cached.sources,
                     "context_used": cached.context_used,
                     "confidence": cached.confidence,
                     "fallback_triggered": cached.fallback_triggered,
+                    "conversation_id": conversation_id,
+                    "used_context": used_context,
+                    "prior_turn_count": len(prior_turns),
                 })}
                 return
 
-            enhanced_data = query_enhancer.enhance_query(body.query)
-            hybrid_search_query = query_enhancer.build_hybrid_search_query(enhanced_data, body.query)
+            # Resolve pronouns / "it" using prior turns.
+            rewritten_query = query_enhancer.rewrite_with_context(body.query, prior_turns)
+            if rewritten_query != body.query:
+                logger.info("Stream context rewrite: %r → %r", body.query[:60], rewritten_query[:80])
+
+            enhanced_data = query_enhancer.enhance_query(rewritten_query)
+            intent = query_enhancer.classify_intent(rewritten_query)
+            hybrid_search_query = query_enhancer.build_hybrid_search_query(enhanced_data, rewritten_query)
             query_type = detect_query_type(hybrid_search_query)
 
             qdrant_client = get_qdrant_client()
@@ -628,9 +901,23 @@ async def stream_chat(
 
             reranked_stream = _bm25_hybrid_rerank(hybrid_search_query, unique_stream)
 
+            # Document diversity (Issue 1, Fix A)
+            if not body.doc_id:
+                reranked_stream = _diversify_by_document(
+                    reranked_stream,
+                    target_k=max(effective_top_k, 8),
+                    max_per_doc=3,
+                    min_docs=2,
+                )
+                # Intent-based affinity (Issue 2, Fix B)
+                reranked_stream = _apply_intent_affinity(
+                    reranked_stream, intent,
+                    min_each=2, target_k=max(effective_top_k, 8),
+                )
+
             stop_words = {"what", "is", "are", "the", "for", "with", "from", "this", "that",
                           "how", "to", "do", "does", "should", "can", "will"}
-            query_words = [w.lower() for w in body.query.split() if len(w) > 3 and w.lower() not in stop_words]
+            query_words = [w.lower() for w in rewritten_query.split() if len(w) > 3 and w.lower() not in stop_words]
             all_keywords = list(set([kw.lower() for kw in enhanced_data.get("keywords", [])] + query_words))
 
             sources = []
@@ -671,18 +958,23 @@ async def stream_chat(
                     fallback_triggered=True,
                     model_used="gemini",
                 )
+                add_turn(conversation_id, "assistant", FALLBACK_MESSAGE, sources_used=[])
                 yield {"data": json.dumps({"token": FALLBACK_MESSAGE})}
                 yield {"data": json.dumps({
                     "done": True, "sources": [], "context_used": [],
                     "confidence": "LOW", "fallback_triggered": True,
+                    "conversation_id": conversation_id,
+                    "used_context": used_context,
+                    "prior_turn_count": len(prior_turns),
                 })}
                 return
 
             context = "\n\n---\n\n".join(context_chunks[:5])
 
-            # Stream tokens
+            # Stream tokens — feed the rewritten query so the answer reflects
+            # the resolved intent.
             full_answer = ""
-            async for token in gemini_service.stream_answer(body.query, context):
+            async for token in gemini_service.stream_answer(rewritten_query, context):
                 full_answer += token
                 yield {"data": json.dumps({"token": token})}
                 await asyncio.sleep(0)
@@ -713,6 +1005,8 @@ async def stream_chat(
             )
             query_cache.set(body.query, completed, body.doc_id)
 
+            add_turn(conversation_id, "assistant", full_answer, sources_used=sources)
+
             yield {"data": json.dumps({
                 "done": True,
                 "sources": sources,
@@ -720,6 +1014,9 @@ async def stream_chat(
                 "confidence": confidence,
                 "fallback_triggered": fallback_triggered,
                 "query_id": stream_qid,
+                "conversation_id": conversation_id,
+                "used_context": used_context,
+                "prior_turn_count": len(prior_turns),
             })}
 
         except Exception as e:
@@ -727,6 +1024,30 @@ async def stream_chat(
             yield {"data": json.dumps({"error": str(e)})}
 
     return EventSourceResponse(event_generator())
+
+
+@router.post("/new_conversation", status_code=status.HTTP_201_CREATED)
+async def new_conversation():
+    """Mint a fresh conversation_id for the client to thread subsequent queries on."""
+    return {"conversation_id": create_conversation()}
+
+
+@router.get("/conversation/{conversation_id}", status_code=status.HTTP_200_OK)
+async def fetch_conversation(conversation_id: str):
+    """Return all turns + metadata for a conversation."""
+    convo = get_full_conversation(conversation_id)
+    if not convo:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return convo
+
+
+@router.delete("/conversation/{conversation_id}", status_code=status.HTTP_200_OK)
+async def end_conversation(conversation_id: str):
+    """Soft-delete a conversation. Turns stay in the table for analytics."""
+    ok = soft_delete_conversation(conversation_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"ok": True, "conversation_id": conversation_id}
 
 
 @router.post("/feedback", status_code=status.HTTP_200_OK)

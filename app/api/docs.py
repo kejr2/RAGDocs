@@ -21,6 +21,41 @@ router = APIRouter()
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_EXTENSIONS = {'.pdf', '.md', '.txt', '.html', '.htm', '.rst', '.json', '.yaml', '.yml'}
 
+# Persist original files so the viewer can reopen any indexed doc, not just
+# ones uploaded in the current browser session.
+UPLOAD_DIR = os.environ.get("RAGDOCS_UPLOAD_DIR", "/tmp/ragdocs_uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+def _stored_path(doc_id: str, file_ext: str) -> str:
+    return os.path.join(UPLOAD_DIR, f"{doc_id}{file_ext or ''}")
+
+
+def _doc_title_from_filename(filename: str) -> str:
+    """
+    '01_NexusPay_API_Reference.pdf' -> 'NexusPay API Reference'.
+    Strips a leading 'NN_' ordering prefix and the file extension, then
+    converts underscores to spaces. Used as the doc-context prefix for
+    embeddings so vector similarity carries which document a chunk came from.
+    """
+    import re
+    base = os.path.splitext(filename or "")[0]
+    base = re.sub(r"^\d+[_\-\s]+", "", base)  # drop leading "01_" / "01-"
+    return base.replace("_", " ").strip() or "Document"
+
+
+def _embed_text_for(chunk, doc_title: str) -> str:
+    """
+    Build the string we send to the embedder. Format:
+        {doc_title} > {section_heading}\n\n{chunk.content}
+    Falls back to just '{doc_title}\n\n{chunk.content}' if no section heading.
+    The stored payload still uses the raw chunk.content so the LLM sees clean
+    source text — only the vector is computed off the prefixed string.
+    """
+    section = (getattr(chunk, "section_heading", "") or chunk.heading or "").strip()
+    header = f"{doc_title} > {section}" if section else doc_title
+    return f"{header}\n\n{chunk.content}"
+
 
 class UploadResponse(BaseModel):
     doc_id: str
@@ -67,6 +102,13 @@ async def upload_document(
         # Generate doc_id from content hash
         doc_id = hashlib.md5(content).hexdigest()
 
+        # Persist original file so the viewer can reopen it later.
+        try:
+            with open(_stored_path(doc_id, file_ext), "wb") as fh:
+                fh.write(content)
+        except Exception as e:
+            logger.warning("Could not persist original file %s: %s", filename, e)
+
         # Deduplicate
         existing_doc = db.query(Document).filter(Document.id == doc_id).first()
         if existing_doc:
@@ -105,9 +147,13 @@ async def upload_document(
         code_chunks = [c for c in chunks if c.type == "code"]
         qdrant_client = get_qdrant_client()
 
+        doc_title = _doc_title_from_filename(filename)
+
         # Embed and store text chunks
         if text_chunks:
-            text_contents = [c.content for c in text_chunks]
+            # Embed with doc/section prefix so vector similarity carries
+            # provenance signal and one document can't dominate every query.
+            text_contents = [_embed_text_for(c, doc_title) for c in text_chunks]
             text_embeddings = embedding_service.encode_text(text_contents)
             text_dim = embedding_service.get_text_embedding_dim()
             ensure_collection_exists("text_chunks", text_dim)
@@ -133,7 +179,8 @@ async def upload_document(
 
         # Embed and store code chunks
         if code_chunks:
-            code_contents = [c.content for c in code_chunks]
+            # Same doc/section prefix for code chunks (provenance signal).
+            code_contents = [_embed_text_for(c, doc_title) for c in code_chunks]
             code_embeddings = embedding_service.encode_code(code_contents)
             code_dim = embedding_service.get_code_embedding_dim()
             ensure_collection_exists("code_chunks", code_dim)

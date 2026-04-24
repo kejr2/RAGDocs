@@ -124,13 +124,37 @@ PRICE_PER_M_INPUT  = 0.075   # USD
 PRICE_PER_M_OUTPUT = 0.30    # USD
 
 
-def get_metrics_summary(last_n: int = 50) -> dict:
-    """Return aggregated metrics over the last N queries."""
+def clear_query_logs() -> int:
+    """Truncate the query_logs table. Returns rows deleted."""
     try:
         with _conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM query_logs ORDER BY timestamp DESC LIMIT ?", (last_n,)
-            ).fetchall()
+            count = conn.execute("SELECT COUNT(*) FROM query_logs").fetchone()[0]
+            conn.execute("DELETE FROM query_logs")
+            conn.commit()
+        return int(count or 0)
+    except Exception as e:
+        logger.warning("Failed to clear query_logs: %s", e)
+        return 0
+
+
+def get_metrics_summary(last_n: int = 50, exclude_before: Optional[str] = None) -> dict:
+    """Return aggregated metrics over the last N queries.
+
+    exclude_before — optional ISO-8601 timestamp; rows with timestamp < this
+    value are ignored (both in the rolling window and in totals).
+    """
+    try:
+        with _conn() as conn:
+            if exclude_before:
+                rows = conn.execute(
+                    "SELECT * FROM query_logs WHERE timestamp >= ? "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    (exclude_before, last_n),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM query_logs ORDER BY timestamp DESC LIMIT ?", (last_n,)
+                ).fetchall()
 
         if not rows:
             return {
@@ -143,6 +167,7 @@ def get_metrics_summary(last_n: int = 50) -> dict:
                 "feedback_down": 0,
                 "feedback_total": 0,
                 "helpfulness_percent": 0.0,
+                "avg_sources_per_query": 0.0,
                 "total_cost_usd": 0.0,
                 "avg_cost_per_query_usd": 0.0,
                 "total_tokens": 0,
@@ -153,6 +178,7 @@ def get_metrics_summary(last_n: int = 50) -> dict:
         avg_latency = sum(r["response_latency_ms"] for r in rows) / total
         avg_score = sum(r["retrieval_score"] for r in rows) / total
         fallback_rate = (sum(r["fallback_triggered"] for r in rows) / total) * 100
+        avg_sources = sum(r["chunks_retrieved"] for r in rows) / total
 
         # Feedback stats (feedback column may be NULL)
         def _safe_int(v):
@@ -232,6 +258,7 @@ def get_metrics_summary(last_n: int = 50) -> dict:
             "feedback_down":           feedback_down,
             "feedback_total":          feedback_total,
             "helpfulness_percent":     round(helpfulness_pct, 1),
+            "avg_sources_per_query":   round(avg_sources, 1),
             "total_cost_usd":          round(total_cost, 6),
             "avg_cost_per_query_usd":  round(avg_cost, 6),
             "total_tokens":            total_tokens_in + total_tokens_out,

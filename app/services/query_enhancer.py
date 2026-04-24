@@ -16,8 +16,141 @@ from app.services.gemini import gemini_service
 class QueryEnhancer:
     """Enhances queries using LLM before vector search"""
 
+    # Intent categories used to bias retrieval (Issue 2, Fix B).
+    INTENT_CATEGORIES = (
+        "getting_started",
+        "api_usage",
+        "authentication",
+        "webhooks",
+        "error_handling",
+        "security",
+        "general",
+    )
+
     def __init__(self):
         self.gemini_service = gemini_service
+
+    def classify_intent(self, user_query: str) -> str:
+        """
+        Single-label intent classifier. Returns one of INTENT_CATEGORIES.
+        Falls back to keyword heuristics if the LLM is disabled or fails.
+        """
+        # Cheap heuristic first — onboarding language is unambiguous and we can
+        # avoid the LLM call entirely.
+        ql = user_query.lower()
+        onboarding_signals = (
+            "first time", "get started", "getting started", "where do i start",
+            "where to start", "set up", "setup", "begin", "start using",
+            "onboard", "new to", "just signed up",
+        )
+        if any(s in ql for s in onboarding_signals):
+            return "getting_started"
+        if "webhook" in ql:
+            return "webhooks"
+        if "auth" in ql or "api key" in ql or "token" in ql:
+            return "authentication"
+        if any(s in ql for s in ("error", "fail", "retry", "exception", "troubleshoot")):
+            return "error_handling"
+        if any(s in ql for s in ("security", "encrypt", "tls", "pci", "vulnerab")):
+            return "security"
+
+        if not self.gemini_service.enabled or not self.gemini_service.model:
+            return "general"
+
+        prompt = (
+            "Classify the user query into EXACTLY ONE of these categories:\n"
+            "  getting_started  — onboarding, first-time setup, where to begin\n"
+            "  api_usage        — making API calls, request/response shape\n"
+            "  authentication   — API keys, tokens, auth headers\n"
+            "  webhooks         — webhook setup, signatures, retries\n"
+            "  error_handling   — error codes, retries, failures\n"
+            "  security         — encryption, compliance, secrets\n"
+            "  general          — none of the above\n\n"
+            "Return ONLY the category name. No explanation.\n\n"
+            f"Query: {user_query}\n"
+            "Category:"
+        )
+        try:
+            response = self.gemini_service.model.generate_content(
+                prompt,
+                generation_config={"temperature": 0.0, "max_output_tokens": 16},
+            )
+            text = (getattr(response, "text", "") or "").strip().lower()
+            text = text.split()[0].strip(".:,") if text else "general"
+            if text in self.INTENT_CATEGORIES:
+                return text
+        except Exception as e:
+            print(f"Intent classification failed, defaulting to general: {e}")
+        return "general"
+
+    def rewrite_with_context(
+        self,
+        user_query: str,
+        prior_turns: List[Dict],
+    ) -> str:
+        """
+        Resolve pronouns / implicit references in *user_query* using up to
+        the last few prior_turns. Returns the rewritten standalone query, or
+        the original query unchanged if no rewrite is needed / available.
+
+        prior_turns: ordered list (oldest → newest) of {"role", "content"}.
+        Caller decides the window size (we don't truncate here).
+        """
+        if not prior_turns or not self.gemini_service.enabled or not self.gemini_service.model:
+            return user_query
+
+        # Build the "Recent conversation" block.
+        joined = "\n".join(
+            f"{t['role'].capitalize()}: {t['content'][:800]}"
+            for t in prior_turns
+        )
+
+        prompt = (
+            "You are a query enhancer for a documentation RAG system. "
+            "Your job is to take the user's question AND the recent conversation "
+            "context, then produce a standalone search query that will retrieve "
+            "the right documentation chunks.\n\n"
+            "Rules:\n"
+            "1. If the user's question contains pronouns (it, that, this, the, they) "
+            "that refer to something in the prior turns, REWRITE the query to use "
+            "the explicit noun instead.\n"
+            "2. Preserve all specific technical terms verbatim (API key, webhook, "
+            "idempotency, 3D Secure, etc.)\n"
+            "3. Keep the user's intent intact.\n"
+            "4. Return ONLY the enhanced query string. No explanation, no quotes, "
+            "no preamble.\n\n"
+            f"Recent conversation:\n{joined}\n\n"
+            f"Current user query: {user_query}\n\n"
+            "Enhanced query:"
+        )
+
+        try:
+            response = self.gemini_service.model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.1,
+                    "max_output_tokens": 128,
+                },
+            )
+            # Use the same safe extractor pattern as gemini.py
+            text = ""
+            try:
+                text = (response.text or "").strip()
+            except Exception:
+                for cand in (response.candidates or []):
+                    parts = getattr(getattr(cand, "content", None), "parts", None) or []
+                    text = " ".join(p.text for p in parts if getattr(p, "text", None)).strip()
+                    if text:
+                        break
+            # Strip surrounding quotes/code fences the model sometimes adds.
+            text = text.strip().strip('"').strip("'").strip("`")
+            # Sanity check — don't accept empty or absurdly long rewrites.
+            if not text or len(text) > 500:
+                return user_query
+            return text
+        except Exception as e:
+            print(f"Context rewrite failed, using original query: {e}")
+            return user_query
 
     def enhance_query(
         self,
@@ -133,6 +266,16 @@ Consider:
 - Extract technical terms and their common variations
 - Include acronyms and their full forms
 - Consider context if provided
+
+ONBOARDING / OPEN-ENDED QUERIES (CRITICAL):
+- If the query is open-ended like "where do I start", "first time setting up", "getting started",
+  "I'm new to X", expand to FOUNDATIONAL topics ONLY:
+    ["authentication", "API keys", "first API call", "test mode setup", "request signing"]
+  Set required_topics to those foundational items. Set multi_query_needed=true,
+  recommended_top_k=10.
+- DO NOT expand onboarding queries to advanced topics like:
+    webhooks, dispute handling, monitoring, observability, refunds, rate limiting.
+  Those belong to api_usage / webhooks intents, not getting_started.
 
 Examples:
 - Query: "Write code to create customer and charge them" 

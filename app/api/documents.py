@@ -1,6 +1,9 @@
 import logging
+import os
+import mimetypes
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
@@ -11,6 +14,20 @@ from app.models.document import Document, Chunk
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Same directory as docs.py upload writes to — keep the env var name in sync.
+UPLOAD_DIR = os.environ.get("RAGDOCS_UPLOAD_DIR", "/tmp/ragdocs_uploads")
+
+
+def _find_stored_file(doc_id: str) -> Optional[str]:
+    """Return path to the persisted original for *doc_id*, regardless of extension."""
+    if not os.path.isdir(UPLOAD_DIR):
+        return None
+    for entry in os.listdir(UPLOAD_DIR):
+        name, _ = os.path.splitext(entry)
+        if name == doc_id:
+            return os.path.join(UPLOAD_DIR, entry)
+    return None
 
 
 class DeleteResponse(BaseModel):
@@ -42,6 +59,35 @@ async def list_documents(db: Session = Depends(get_db)) -> List[DocumentItem]:
         )
         for d in rows
     ]
+
+
+@router.get("/file/{doc_id}", status_code=status.HTTP_200_OK)
+async def get_document_file(doc_id: str, db: Session = Depends(get_db)):
+    """
+    Stream the original uploaded file for *doc_id*. Lets the frontend
+    re-open any indexed document, not just ones uploaded in the current
+    browser session.
+    """
+    document = db.query(Document).filter(Document.id == doc_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+
+    path = _find_stored_file(doc_id)
+    if not path or not os.path.isfile(path):
+        # Metadata exists, file does not — uploaded before persistence was on.
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Original file is not available on the server "
+                "(uploaded before file persistence was enabled). Re-upload to view."
+            ),
+        )
+
+    media_type = (
+        mimetypes.guess_type(document.filename)[0]
+        or "application/octet-stream"
+    )
+    return FileResponse(path, media_type=media_type, filename=document.filename)
 
 
 @router.delete("/documents/{doc_id}", status_code=status.HTTP_200_OK)
@@ -80,5 +126,13 @@ async def delete_document(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting document metadata: {str(e)}"
         )
+
+    # Remove persisted original file too.
+    stored = _find_stored_file(doc_id)
+    if stored:
+        try:
+            os.remove(stored)
+        except Exception as e:
+            logger.warning("Could not remove stored file %s: %s", stored, e)
 
     return DeleteResponse(status="success", doc_id=doc_id)

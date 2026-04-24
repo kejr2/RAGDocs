@@ -82,6 +82,10 @@ export default function RAGDocsApp() {
   const [showEasterEgg,   setShowEasterEgg]   = useState(false);
   const konamiProgress = useRef(0);
   const fileInputRef = useRef(null);
+  // Per-doc viewer cache: doc_id → { pdfUrl?, textContent?, textFilename? }
+  // Lets the user switch between docs in the sidebar without re-uploading,
+  // and prevents concurrent uploads from racing on a single pdfUrl state.
+  const docCache = useRef(new Map());
 
   /* ─── Konami code easter egg ────────────────────────────────────────── */
   useEffect(() => {
@@ -117,19 +121,77 @@ export default function RAGDocsApp() {
     return () => { cancelled = true; };
   }, []);
 
+  /* ─── Swap viewer when currentDoc changes ───────────────────────────── */
+  useEffect(() => {
+    if (!currentDoc) {
+      setPdfUrl(null); setTextContent(null); setTextFilename(null);
+      return;
+    }
+    const cached = docCache.current.get(currentDoc.doc_id);
+    if (cached?.pdfUrl) {
+      setPdfUrl(cached.pdfUrl);
+      setTextContent(null);
+      setTextFilename(null);
+      return;
+    }
+    if (cached?.textContent != null) {
+      setPdfUrl(null);
+      setTextContent(cached.textContent);
+      setTextFilename(cached.textFilename || currentDoc.filename);
+      return;
+    }
+
+    // No cache — doc was indexed in a prior session. Fetch the persisted
+    // original from the backend so the viewer can render it.
+    let cancelled = false;
+    setPdfUrl(null); setTextContent(null); setTextFilename(null);
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/docs/file/${currentDoc.doc_id}`);
+        if (!res.ok) return;  // 410 etc. — viewer falls through to placeholder
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        const isPdf = ct.includes('pdf') || /\.pdf$/i.test(currentDoc.filename);
+        if (isPdf) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          if (cancelled) { URL.revokeObjectURL(url); return; }
+          docCache.current.set(currentDoc.doc_id, {
+            pdfUrl: url, textContent: null, textFilename: currentDoc.filename,
+          });
+          setPdfUrl(url); setTextContent(null);
+          setTextFilename(currentDoc.filename);
+        } else {
+          const text = await res.text();
+          if (cancelled) return;
+          docCache.current.set(currentDoc.doc_id, {
+            pdfUrl: null, textContent: text, textFilename: currentDoc.filename,
+          });
+          setPdfUrl(null); setTextContent(text);
+          setTextFilename(currentDoc.filename);
+        }
+      } catch {
+        /* silent — viewer shows the "indexed" placeholder */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentDoc]);
+
   /* ─── Upload ────────────────────────────────────────────────────────── */
-  const uploadFile = useCallback(async (file) => {
+  const uploadFile = useCallback(async (file, { selectAfter = false } = {}) => {
     const key = file.name + Date.now();
     setUploadingFiles(prev => ({ ...prev, [key]: true }));
 
-    if (file.type === 'application/pdf') {
-      setPdfUrl(URL.createObjectURL(file));
-      setTextContent(null);
-    } else {
-      setPdfUrl(null);
-      const reader = new FileReader();
-      reader.onload = e => { setTextContent(e.target.result); setTextFilename(file.name); };
-      reader.readAsText(file);
+    // Pre-stage viewer payload; commit to cache once we know the doc_id.
+    const isPdf = file.type === 'application/pdf';
+    const stagedPdfUrl = isPdf ? URL.createObjectURL(file) : null;
+    let stagedText = null;
+    if (!isPdf) {
+      stagedText = await new Promise((resolve) => {
+        const r = new FileReader();
+        r.onload = e => resolve(e.target.result);
+        r.onerror = () => resolve('');
+        r.readAsText(file);
+      });
     }
 
     const form = new FormData();
@@ -144,23 +206,41 @@ export default function RAGDocsApp() {
       }
       const result = await res.json();
       const doc = { ...result, uploadedAt: new Date().toISOString() };
+
+      // Cache viewer payload by doc_id so the sidebar can switch back.
+      const prev = docCache.current.get(result.doc_id);
+      if (prev?.pdfUrl && prev.pdfUrl !== stagedPdfUrl) URL.revokeObjectURL(prev.pdfUrl);
+      docCache.current.set(result.doc_id, {
+        pdfUrl: stagedPdfUrl,
+        textContent: stagedText,
+        textFilename: file.name,
+      });
+
       setDocuments(prev => prev.find(d => d.doc_id === result.doc_id) ? prev : [doc, ...prev]);
-      setCurrentDoc(doc);
+      // Only the first file in a multi-drop auto-selects, so the user isn't
+      // yanked between viewers as concurrent uploads finish.
+      if (selectAfter) setCurrentDoc(doc);
+
       if (result.status === 'already_exists') {
         toast(`"${result.filename}" already indexed`, { icon: 'ℹ️' });
       } else {
         toast.success(`"${result.filename}" — ${result.total_chunks} chunks indexed`);
       }
     } catch (err) {
+      // Upload failed — discard the staged blob URL.
+      if (stagedPdfUrl) URL.revokeObjectURL(stagedPdfUrl);
       toast.error(`Failed: ${err.message || 'Upload failed'}`);
-      setPdfUrl(null); setTextContent(null);
     } finally {
       setUploadingFiles(prev => { const n = { ...prev }; delete n[key]; return n; });
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }, []);
 
-  const onDrop = useCallback(files => files.forEach(uploadFile), [uploadFile]);
+  const onDrop = useCallback(files => {
+    // Auto-select only the first file in a batch — avoids the race where
+    // 3 parallel uploads each call setCurrentDoc and the last one wins.
+    files.forEach((f, i) => uploadFile(f, { selectAfter: i === 0 }));
+  }, [uploadFile]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop, accept: ACCEPT_TYPES, noClick: true, multiple: true,
@@ -172,9 +252,11 @@ export default function RAGDocsApp() {
       const res = await fetch(`${API_BASE}/docs/documents/${docId}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Delete failed');
       setDocuments(prev => prev.filter(d => d.doc_id !== docId));
-      if (currentDoc?.doc_id === docId) {
-        setCurrentDoc(null); setPdfUrl(null); setTextContent(null); setTextFilename(null);
-      }
+      // Free the cached blob URL.
+      const cached = docCache.current.get(docId);
+      if (cached?.pdfUrl) URL.revokeObjectURL(cached.pdfUrl);
+      docCache.current.delete(docId);
+      if (currentDoc?.doc_id === docId) setCurrentDoc(null);
       toast.success('Document deleted');
     } catch { toast.error('Failed to delete'); }
     finally { setDeleteConfirm(null); }
@@ -307,7 +389,10 @@ export default function RAGDocsApp() {
           >
             <input {...getInputProps()} />
             <input ref={fileInputRef} type="file" multiple accept={ACCEPT_STRING}
-                   className="hidden" onChange={e => Array.from(e.target.files || []).forEach(uploadFile)} />
+                   className="hidden" onChange={e => {
+                     const files = Array.from(e.target.files || []);
+                     files.forEach((f, i) => uploadFile(f, { selectAfter: i === 0 }));
+                   }} />
 
             {isUploading ? (
               <div className="flex items-center justify-center gap-2 py-1">
@@ -431,7 +516,7 @@ export default function RAGDocsApp() {
                 </h3>
                 <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                   {currentDoc
-                    ? `"${currentDoc.filename}" is ready. Use the chat panel to query it.`
+                    ? `"${currentDoc.filename}" is indexed and queryable from the chat panel. Re-upload the file to view it inline.`
                     : 'Drop a document in the sidebar to get started.'}
                 </p>
                 {!currentDoc && (

@@ -3,7 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ReferenceLine, ResponsiveContainer,
 } from 'recharts';
-import { Activity, Clock, Target, AlertTriangle, RefreshCw, ThumbsUp, DollarSign, HelpCircle } from 'lucide-react';
+import { Activity, Clock, Target, AlertTriangle, RefreshCw, Layers, DollarSign, HelpCircle } from 'lucide-react';
 import { API_BASE } from '../config';
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
@@ -26,7 +26,7 @@ function scoreToConfidence(score) {
 
 /* ─── sub-components ─────────────────────────────────────────────────────── */
 
-function HeroCard({ icon: Icon, value, suffix, label, color, subtext }) {
+function HeroCard({ icon: Icon, value, suffix, label, color, subtext, context }) {
   return (
     <div style={{
       background: '#1a1a1a',
@@ -50,6 +50,11 @@ function HeroCard({ icon: Icon, value, suffix, label, color, subtext }) {
       <p className="font-mono-ui uppercase tracking-widest text-xs" style={{ color: '#555' }}>
         {label}
       </p>
+      {context && (
+        <p style={{ fontSize: '10px', color: '#666', fontStyle: 'italic', marginTop: '6px', lineHeight: 1.4 }}>
+          {context}
+        </p>
+      )}
       {subtext && (
         <p className="text-xs mt-1.5" style={{ color: '#444', lineHeight: '1.4' }}>
           {subtext}
@@ -126,10 +131,11 @@ export default function MetricsPage() {
 
   /* ── derived values ──────────────────────────────────────────────────── */
 
+  // Generous thresholds: 3s production-grade RAG is fast.
   const latencyColor = !data ? '#555'
-    : data.avg_response_latency_ms < 500 ? '#4ade80'
-    : data.avg_response_latency_ms < 1500 ? '#fbbf24'
-    : '#f87171';
+    : data.avg_response_latency_ms < 3000 ? '#4dff91'
+    : data.avg_response_latency_ms < 6000 ? '#f5a623'
+    : '#ff5555';
 
   const scoreColor = !data ? '#555'
     : data.avg_retrieval_score > 0.70 ? '#4ade80'
@@ -141,10 +147,6 @@ export default function MetricsPage() {
     : data.fallback_rate_percent < 25 ? '#fbbf24'
     : '#f87171';
 
-  const helpfulColor = !data ? '#555'
-    : data.helpfulness_percent > 80 ? '#4ade80'
-    : data.helpfulness_percent > 50 ? '#fbbf24'
-    : '#f87171';
 
   // Chart data — last 50 reversed (oldest → newest left to right)
   const chartData = data?.recent_queries
@@ -223,6 +225,7 @@ export default function MetricsPage() {
             value={loading ? '…' : (data?.total_queries_served ?? 0).toLocaleString()}
             label="Queries Served"
             color="#c6f135"
+            context="(since deployment)"
           />
           <HeroCard
             icon={Clock}
@@ -230,12 +233,14 @@ export default function MetricsPage() {
             suffix="ms"
             label="Avg Response Time"
             color={latencyColor}
+            context="Target: under 5s for multi-doc queries"
           />
           <HeroCard
             icon={Target}
             value={loading ? '…' : data?.avg_retrieval_score?.toFixed(2) ?? '0.00'}
             label="Retrieval Quality"
             color={scoreColor}
+            context="Above 0.8 is production-grade"
           />
           <HeroCard
             icon={AlertTriangle}
@@ -243,15 +248,14 @@ export default function MetricsPage() {
             suffix="%"
             label="Fallback Rate"
             color={fallbackColor}
-            subtext="How often the system refuses to answer"
+            context="Lower means more confident answers"
           />
           <HeroCard
-            icon={ThumbsUp}
-            value={loading ? '…' : (data?.feedback_total ?? 0) === 0 ? '—' : Math.round(data?.helpfulness_percent ?? 0)}
-            suffix={(data?.feedback_total ?? 0) > 0 ? '%' : undefined}
-            label="Helpfulness"
-            color={helpfulColor}
-            subtext={data?.feedback_total ? `${data.feedback_up} 👍 · ${data.feedback_down} 👎` : 'No feedback yet'}
+            icon={Layers}
+            value={loading ? '…' : (data?.avg_sources_per_query ?? 0).toFixed(1)}
+            label="Sources / Query"
+            color="#c6f135"
+            context="Avg documents referenced per answer"
           />
         </div>
 
@@ -345,9 +349,9 @@ export default function MetricsPage() {
                             style={{
                               padding: '10px 16px',
                               fontSize: '12px',
-                              color: q.response_latency_ms < 500 ? '#4ade80'
-                                   : q.response_latency_ms < 1500 ? '#fbbf24'
-                                   : '#f87171',
+                              color: q.response_latency_ms < 3000 ? '#4dff91'
+                                   : q.response_latency_ms < 6000 ? '#f5a623'
+                                   : '#ff5555',
                               whiteSpace: 'nowrap',
                             }}>
                           {q.response_latency_ms} ms
@@ -408,13 +412,13 @@ export default function MetricsPage() {
                 <Tooltip content={<ChartTooltip />} />
                 {/* SLA threshold */}
                 <ReferenceLine
-                  y={1500}
-                  stroke="#f87171"
+                  y={5000}
+                  stroke="#f5a623"
                   strokeDasharray="4 4"
                   strokeOpacity={0.5}
                   label={{
-                    value: 'SLA 1500 ms',
-                    fill: '#f87171',
+                    value: 'Target 5000 ms',
+                    fill: '#f5a623',
                     fontSize: 10,
                     fontFamily: "'DM Mono', monospace",
                     position: 'insideTopRight',
